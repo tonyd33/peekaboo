@@ -1,16 +1,15 @@
-#include "cairo.h"
 #include "fractional-scale-v1.h"
 #include "hyprland-toplevel-export-v1.h"
 #include "log.h"
 #include "peekaboo.h"
 #include "preview.h"
-#include "shm.h"
 #include "src/surface.h"
 #include "string.h"
 #include "viewporter.h"
 #include "wlr-foreign-toplevel-management-unstable-v1.h"
 #include "wlr-layer-shell-unstable-v1.h"
 #include "wlr-screencopy-unstable-v1.h"
+#include "wm_client/wm_client.h"
 #include "xdg-output-unstable-v1.h"
 #include <stddef.h>
 #include <stdlib.h>
@@ -142,15 +141,18 @@ static void handle_keyboard_key(void *data, struct wl_keyboard *wl_keyboard,
   struct seat *seat = data;
 
   const xkb_keycode_t key_code = key + 8;
+  if (!xkb_keycode_is_legal_x11(key_code)) {
+    return;
+  }
+
   const xkb_keysym_t key_sym =
       xkb_state_key_get_one_sym(seat->xkb_state, key_code);
-  /* xkb_keysym_to_utf8(key_sym, text, sizeof(text)); */
+  char ch = xkb_state_key_get_utf32(seat->xkb_state, key_code);
 
-  log_debug("Handling keyboard key %u %u\n", key_sym, XKB_KEY_Escape);
-  if (key_sym == XKB_KEY_Escape) {
-    seat->peekaboo->running = false;
+  bool needs_redraw = handle_key(seat->peekaboo, key_sym, ch);
+  if (needs_redraw) {
+    request_frame(seat->peekaboo);
   }
-  request_frame(seat->peekaboo);
 }
 
 static const struct wl_keyboard_listener wl_keyboard_listener = {
@@ -169,18 +171,6 @@ static void handle_seat_capabilities(void *data, struct wl_seat *wl_seat,
     seat->wl_keyboard = wl_seat_get_keyboard(seat->wl_seat);
     wl_keyboard_add_listener(seat->wl_keyboard, &wl_keyboard_listener, seat);
   }
-}
-
-static struct output *find_output_from_wl_output(struct wl_list *outputs,
-                                                 struct wl_output *wl_output) {
-  struct output *output;
-  wl_list_for_each(output, outputs, link) {
-    if (wl_output == output->wl_output) {
-      return output;
-    }
-  }
-
-  return NULL;
 }
 
 static void handle_output_scale(void *data, struct wl_output *wl_output,
@@ -204,137 +194,6 @@ const static struct wl_output_listener output_listener = {
 const struct wl_seat_listener wl_seat_listener = {
     .name = (void *)noop,
     .capabilities = handle_seat_capabilities,
-};
-
-static void handle_hyprland_toplevel_export_frame_buffer(
-    void *data,
-    struct hyprland_toplevel_export_frame_v1 *hyprland_toplevel_export_frame,
-    uint32_t format, uint32_t width, uint32_t height, uint32_t stride) {
-  log_debug("hyprland_toplevel_export_frame buffer event received\n");
-
-  struct peekaboo *peekaboo = data;
-
-  /*
-   * I didn't realize this when I started implementing, but presumably, more
-   * than one "buffer" event indicates multiple buffer parameters that this
-   * export_frame can use, and we can choose which one we want.
-   * The current implementation will take only the last buffer event to use
-   * for the buffer parameters. I've only seen each export_frame send one
-   * buffer event, but we should probably handle multiple buffer events.
-   *
-   * TODO: Handle multiple buffer events
-   */
-
-  struct preview *export_frame;
-  wl_list_for_each(export_frame, &peekaboo->previews, link) {
-    if (export_frame->toplevel_export_frame == hyprland_toplevel_export_frame) {
-      /* Fill in the export_frame's fields for copying. */
-      export_frame->width = width;
-      export_frame->height = height;
-      export_frame->stride = stride;
-      export_frame->format = format;
-    }
-  }
-}
-
-void handle_hyprland_toplevel_export_frame_buffer_done(
-    void *data,
-    struct hyprland_toplevel_export_frame_v1 *hyprland_toplevel_export_frame) {
-  log_debug("hyprland_toplevel_export_frame buffer done event received\n");
-  struct peekaboo *peekaboo = data;
-  struct preview *export_frame;
-  wl_list_for_each(export_frame, &peekaboo->previews, link) {
-    if (export_frame->toplevel_export_frame == hyprland_toplevel_export_frame) {
-      uint32_t width = export_frame->width;
-      uint32_t height = export_frame->height;
-      uint32_t stride = export_frame->stride;
-      uint32_t format = export_frame->format;
-      uint32_t data_size = export_frame->height * export_frame->stride;
-
-      int fd = shm_allocate_file(data_size);
-      if (fd < 0) {
-        log_error("Failed to allocate file descriptor\n");
-        return;
-      }
-
-      export_frame->buf =
-          mmap(NULL, data_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-      if ((int64_t)export_frame->buf < 0) {
-        log_error("Failed to memory map buffer\n");
-        return;
-      }
-      struct wl_shm_pool *wl_shm_pool =
-          wl_shm_create_pool(peekaboo->wl_shm, fd, data_size);
-      export_frame->wl_buffer = wl_shm_pool_create_buffer(
-          wl_shm_pool, 0, width, height, stride, format);
-      hyprland_toplevel_export_frame_v1_copy(hyprland_toplevel_export_frame,
-                                             export_frame->wl_buffer, 1);
-
-      /* cleanup */
-      wl_shm_pool_destroy(wl_shm_pool);
-      close(fd);
-    }
-  }
-}
-
-/* Called when copying the export_frame is finished. */
-void handle_hyprland_toplevel_export_frame_ready(
-    void *data,
-    struct hyprland_toplevel_export_frame_v1 *hyprland_toplevel_export_frame,
-    uint32_t tv_sec_hi, uint32_t tv_sec_lo, uint32_t tv_nsec) {
-  log_debug("hyprland_toplevel_export_frame ready event received\n");
-  struct peekaboo *peekaboo = data;
-
-  struct preview *export_frame;
-  wl_list_for_each(export_frame, &peekaboo->previews, link) {
-    if (export_frame->toplevel_export_frame == hyprland_toplevel_export_frame) {
-      export_frame->ready = true;
-      // TODO: Call copy again. We need to make sure that the previously
-      // allocated resources for the export_frame buffer are properly destroyed
-      // in the "buffer_done" event handler though.
-    }
-  }
-
-  request_frame(peekaboo);
-}
-
-const struct hyprland_toplevel_export_frame_v1_listener
-    hyprland_toplevel_export_frame_listener = {
-        .buffer = handle_hyprland_toplevel_export_frame_buffer,
-        .damage = (void *)noop,
-        .flags = (void *)noop,
-        .ready = handle_hyprland_toplevel_export_frame_ready,
-        .failed = (void *)noop,
-        .linux_dmabuf = (void *)noop,
-        .buffer_done = handle_hyprland_toplevel_export_frame_buffer_done,
-};
-
-void handle_zwlr_foreign_toplevel_title(
-    void *data,
-    struct zwlr_foreign_toplevel_handle_v1 *zwlr_foreign_toplevel_handle,
-    const char *title) {
-  struct peekaboo *peekaboo = data;
-  struct preview *preview;
-  wl_list_for_each(preview, &peekaboo->previews, link) {
-    if (preview->toplevel_handle == zwlr_foreign_toplevel_handle) {
-      strncpy(preview->toplevel_title, title, TOPLEVEL_TITLE_MAX_LENGTH);
-      log_debug("setting maximized %s\n", title);
-      zwlr_foreign_toplevel_handle_v1_activate(zwlr_foreign_toplevel_handle,
-                                               NULL);
-    }
-  }
-}
-
-const struct zwlr_foreign_toplevel_handle_v1_listener
-    zwlr_foreign_toplevel_handle_listener = {
-        .title = handle_zwlr_foreign_toplevel_title,
-        .app_id = (void *)noop,
-        .output_enter = (void *)noop,
-        .output_leave = (void *)noop,
-        .state = (void *)noop,
-        .done = (void *)noop,
-        .closed = (void *)noop,
-        .parent = (void *)noop,
 };
 
 static void handle_layer_surface_configure(
@@ -476,25 +335,12 @@ static void registry_global(void *data, struct wl_registry *registry,
         wl_registry_bind(registry, name, &wp_viewporter_interface, 1);
     log_debug("Bound to wp_viewporter %u.\n", name);
   }
-  /* zwlr_screencopy_manager */
-  else if (!strcmp(interface, zwlr_screencopy_manager_v1_interface.name)) {
-    peekaboo->zwlr_screencopy_manager = wl_registry_bind(
-        registry, name, &zwlr_screencopy_manager_v1_interface, 3);
-    log_debug("Bound to zwlr_screencopy_manager %u.\n", name);
-  }
   /* hyprland_toplevel_export_manager */
   else if (!strcmp(interface,
                    hyprland_toplevel_export_manager_v1_interface.name)) {
     peekaboo->hyprland_toplevel_export_manager = wl_registry_bind(
         registry, name, &hyprland_toplevel_export_manager_v1_interface, 2);
     log_debug("Bound to hyprland_toplevel_export_manager %u.\n", name);
-  }
-  /* zwlr_foreign_toplevel_manager */
-  else if (!strcmp(interface,
-                   zwlr_foreign_toplevel_manager_v1_interface.name)) {
-    peekaboo->zwlr_toplevel_manager = wl_registry_bind(
-        registry, name, &zwlr_foreign_toplevel_manager_v1_interface, 3);
-    log_debug("Bound to zwlr_foreign_toplevel_manager %u.\n", name);
   }
 }
 
@@ -526,13 +372,15 @@ int main(int argc, char **argv) {
       .wl_shm = NULL,
       .wl_layer_shell = NULL,
       .wl_surface = NULL,
+      .request_frame = request_frame,
       .running = true,
+      .selected_client = NULL,
   };
 
   wl_list_init(&peekaboo.outputs);
   wl_list_init(&peekaboo.seats);
   wl_list_init(&peekaboo.toplevel_handles);
-  wl_list_init(&peekaboo.previews);
+  wl_list_init(&peekaboo.wm_clients);
 
   /* Prepare for first roundtrip. */
 
@@ -558,18 +406,11 @@ int main(int argc, char **argv) {
   EXPECT_NON_NULL(peekaboo.wl_layer_shell, "zwlr_layer_shell_v1");
   EXPECT_NON_NULL(peekaboo.xdg_output_manager, "xdg_output_manager");
   EXPECT_NON_NULL(peekaboo.wp_viewporter, "wp_viewporter");
-  EXPECT_NON_NULL(peekaboo.zwlr_screencopy_manager, "zwlr_screencopy_manager");
   EXPECT_NON_NULL(peekaboo.wl_output, "wl_output");
   EXPECT_NON_NULL(peekaboo.hyprland_toplevel_export_manager,
                   "hyprland_toplevel_export_manager");
-  EXPECT_NON_NULL(peekaboo.zwlr_toplevel_manager, "zwlr_toplevel_manager");
 
   /* Prepare second roundtrip. */
-
-  /* 1. Add listener for toplevels. */
-  zwlr_foreign_toplevel_manager_v1_add_listener(
-      peekaboo.zwlr_toplevel_manager, &zwlr_foreign_toplevel_manager_listener,
-      &peekaboo);
 
   /* 2. For every output, add listeners. */
   struct output *output;
@@ -587,36 +428,29 @@ int main(int argc, char **argv) {
   log_unindent();
   log_debug("Finished second roundtrip\n");
 
-  /* By now, we should have the list of outputs and toplevels. We now need
-   * to capture the toplevels by creating an export frame, adding listeners,
-   * and then doing another roundtrip to receive the buffer information and
-   * request a copy on the buffers. */
-  struct toplevel_handle *toplevel_handle;
-  struct preview *preview;
-  wl_list_for_each(toplevel_handle, &peekaboo.toplevel_handles, link) {
-    preview = calloc(1, sizeof(struct preview));
-    preview->toplevel_handle = toplevel_handle->zwlr_foreign_toplevel_handle;
-    preview->toplevel_export_frame =
-        hyprland_toplevel_export_manager_v1_capture_toplevel_with_wlr_toplevel_handle(
-            peekaboo.hyprland_toplevel_export_manager, 0,
-            toplevel_handle->zwlr_foreign_toplevel_handle);
-
-    /* It wouldn't be a bad idea to pass in the export_frame itself as data
-     * so that, in the listener, we don't have to search for the export_frame
-     * entry, but we do rely on the shm pool to create buffers. While we could
-     * add that to the export_frame struct, I feel like it's bound to lead
-     * to a double free, since the same wl_shm_pool would exist in multiple
-     * places. Additionally, we pass the state uniformly in other listeners.*/
-    hyprland_toplevel_export_frame_v1_add_listener(
-        preview->toplevel_export_frame,
-        &hyprland_toplevel_export_frame_listener, &peekaboo);
-
-    zwlr_foreign_toplevel_handle_v1_add_listener(
-        preview->toplevel_handle, &zwlr_foreign_toplevel_handle_listener,
-        &peekaboo);
-
-    wl_list_insert(&peekaboo.previews, &preview->link);
-  }
+  /* Initialize a list of clients connected to the WM.
+   *
+   * Currently, only hyprland is supported. To support another WM, the following
+   * conditions must be met:
+   * 1. There is a way to capture every toplevel surface into a buffer
+   * 2. (Optional, but nice) There is a way to associate each toplevel surface
+   *    to a title
+   * 3. There is a way to associate each toplevel in such a way that we can
+   *    later "open" or "focus" a toplevel.
+   *
+   * While there are WM-agnostic protocols for at least condition 1, I have
+   * not been able to find any WM-agnostic protocols for condition 2 or 3.
+   * The closest I've found is zwlr_foreign_toplevel_manager, but the problem
+   * with that is:
+   * - (Possibly solvable and not strictly necessary) We don't receive the title
+   *   of toplevels unless they're changed.
+   * - (Necessary) zwlr_foreign_toplevel_manager doesn't provide a way to focus
+   *   the toplevel.
+   *
+   * So until I find ways to meet the conditions for other WMs, I can only
+   * support hyprland, which is what I use anyway.
+   */
+  wm_clients_init(&peekaboo, &peekaboo.wm_clients, WM_CLIENT_HYPRLAND);
 
   /* Third roundtrip. */
   log_debug("Starting third roundtrip\n");
@@ -625,7 +459,8 @@ int main(int argc, char **argv) {
   log_unindent();
   log_debug("Finished third roundtrip\n");
 
-  /* In this roundtrip, what should've happened for export_frames was:
+  /* In this roundtrip, what should've happened for hyprland's export_frames
+   * was:
    * 1. For each export_frame, we receive "buffer" event(s) informing us of the
    *    buffer parameters like width, height, etc. that the export frames can
    *    support. We currently only take the last event.
@@ -635,22 +470,13 @@ int main(int argc, char **argv) {
    *    allowing unready export_frames to only have a background color.
    */
 
-  /* char filename[] = "a.png"; */
-  /* wl_list_for_each(export_frame, &peekaboo.export_frames, link) { */
-  /* cairo_surface_t *cairo_surface = cairo_image_surface_create_for_data( */
-  /* export_frame->buf, CAIRO_FORMAT_ARGB32, export_frame->width, */
-  /* export_frame->height, export_frame->stride); */
-  /* cairo_surface_write_to_png(cairo_surface, filename); */
-  /* filename[0]++; */
-  /* } */
-
   surface_buffer_pool_init(&peekaboo.surface_buffer_pool);
   peekaboo.wl_surface = wl_compositor_create_surface(peekaboo.wl_compositor);
   /* wl_surface_add_listener(peekaboo.wl_surface, &surface_listener, &peekaboo);
    */
   peekaboo.wl_layer_surface = zwlr_layer_shell_v1_get_layer_surface(
       peekaboo.wl_layer_shell, peekaboo.wl_surface, peekaboo.wl_output,
-      ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "selection");
+      ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "peekaboo");
   zwlr_layer_surface_v1_add_listener(peekaboo.wl_layer_surface,
                                      &wl_layer_surface_listener, &peekaboo);
   zwlr_layer_surface_v1_set_exclusive_zone(peekaboo.wl_layer_surface, -1);
@@ -662,28 +488,17 @@ int main(int argc, char **argv) {
   zwlr_layer_surface_v1_set_keyboard_interactivity(peekaboo.wl_layer_surface,
                                                    true);
 
-  /* struct wp_fractional_scale_v1 *fractional_scale = NULL; */
-  /* if (peekaboo.fractional_scale_mgr) { */
-  /* fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale( */
-  /* peekaboo.fractional_scale_mgr, peekaboo.wl_surface); */
-  /* wp_fractional_scale_v1_add_listener(fractional_scale, */
-  /* &fractional_scale_listener, &peekaboo); */
-  /* } */
-
-  /* state.wp_viewport = */
-  /* wp_viewporter_get_viewport(state.wp_viewporter, state.wl_surface); */
-
   wl_surface_commit(peekaboo.wl_surface);
 
   while (peekaboo.running && wl_display_dispatch(peekaboo.wl_display) != -1) {
   }
 
-  /* Cleanup */
-  wl_list_for_each(preview, &peekaboo.previews, link) {
-    wl_buffer_destroy(preview->wl_buffer);
-    zwlr_foreign_toplevel_handle_v1_destroy(preview->toplevel_handle);
-    hyprland_toplevel_export_frame_v1_destroy(preview->toplevel_export_frame);
+  if (peekaboo.selected_client != NULL) {
+    wm_client_focus(peekaboo.selected_client);
   }
+
+  /* Cleanup */
+  wm_clients_destroy(&peekaboo.wm_clients, WM_CLIENT_HYPRLAND);
   surface_buffer_pool_destroy(&peekaboo.surface_buffer_pool);
 
   wl_display_disconnect(peekaboo.wl_display);

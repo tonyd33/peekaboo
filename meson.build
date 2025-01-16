@@ -30,14 +30,10 @@ config_location = join_paths(
 add_project_arguments(
   [
     '-pedantic',
-    #'-Wconversion',
     '-Wshadow',
     '-Wno-unused-parameter',
     '-D_GNU_SOURCE',
     '-D_FORTIFY_SOURCE=2',
-    # Disable these unwind tables for binary size, as we don't use exceptions
-    # or anything else that requires them.
-    '-fno-asynchronous-unwind-tables',
   ],
   language: 'c'
 )
@@ -47,23 +43,20 @@ common_sources = files(
   'src/shm.c',
   'src/surface.c',
   'src/preview.c',
+  'src/wm_client/wm_client.c',
+  'src/wm_client/hyprland.c',
 )
 
 cc = meson.get_compiler('c')
-librt = cc.find_library('rt', required: false)
 libm = cc.find_library('m', required: false)
-# On systems where libc doesn't provide fts (i.e. musl) we require libfts
-libfts = cc.find_library('fts', required: not cc.has_function('fts_read'))
-freetype = dependency('freetype2')
-harfbuzz = dependency('harfbuzz')
 cairo = dependency('cairo')
 pangocairo = dependency('pangocairo')
 wayland_client = dependency('wayland-client')
 wayland_protocols = dependency('wayland-protocols', native: true)
 wayland_scanner_dep = dependency('wayland-scanner', native: true)
 xkbcommon = dependency('xkbcommon')
+cjson = dependency('libcjson')
 glib = dependency('glib-2.0')
-gio_unix = dependency('gio-unix-2.0')
 
 if wayland_client.version().version_compare('<1.20.0')
   add_project_arguments(
@@ -71,21 +64,6 @@ if wayland_client.version().version_compare('<1.20.0')
     language: 'c'
     )
 endif
-
-if harfbuzz.version().version_compare('<4.0.0')
-  add_project_arguments(
-    ['-DNO_HARFBUZZ_METRIC_FALLBACK=1'],
-    language: 'c'
-    )
-endif
-
-if harfbuzz.version().version_compare('<4.4.0')
-  add_project_arguments(
-    ['-DNO_HARFBUZZ_FONT_CHANGED=1'],
-    language: 'c'
-    )
-endif
-
 
 
 # Generate the necessary Wayland headers / sources with wayland-scanner
@@ -126,7 +104,14 @@ endforeach
 executable(
   'peekaboo',
   files('src/main.c'), common_sources, wl_proto_src, wl_proto_headers,
-  dependencies: [librt, libm, libfts, freetype, harfbuzz, cairo, pangocairo, wayland_client, xkbcommon, glib, gio_unix],
+  dependencies: [
+    libm,
+    cairo,
+    pangocairo,
+    wayland_client,
+    xkbcommon,
+    cjson,
+  ],
   install: true
 )
 

@@ -6,7 +6,7 @@
 #include "wlr-screencopy-unstable-v1.h"
 #include "surface.h"
 
-#define TOPLEVEL_TITLE_MAX_LENGTH 512
+#define MAX_INPUT_LENGTH 512
 
 struct output {
     struct wl_list         link; // type: struct output
@@ -35,23 +35,6 @@ struct toplevel_handle {
   struct zwlr_foreign_toplevel_handle_v1 *zwlr_foreign_toplevel_handle;
 };
 
-struct preview {
-  struct wl_list                           link; // type struct preview
-  // TODO: Merge struct toplevel_handle into struct preview
-  struct zwlr_foreign_toplevel_handle_v1   *toplevel_handle;
-  char                                      toplevel_title[TOPLEVEL_TITLE_MAX_LENGTH];
-
-  struct hyprland_toplevel_export_frame_v1 *toplevel_export_frame;
-  struct wl_buffer                         *wl_buffer;
-  cairo_surface_t                          *cr_surface;
-  void                                     *buf;
-  uint32_t                                 width;
-  uint32_t                                 height;
-  uint32_t                                 stride;
-  uint32_t                                 format;
-  bool                                     ready;
-};
-
 struct config {
   int32_t preview_window_width;
   int32_t preview_window_height;
@@ -77,10 +60,7 @@ struct peekaboo {
   struct wl_callback                         *wl_surface_callback;
   struct zwlr_layer_surface_v1               *wl_layer_surface;
   struct zxdg_output_manager_v1              *xdg_output_manager;
-  struct zwlr_screencopy_frame_v1            *zwlr_screencopy_frame;
-  struct zwlr_screencopy_manager_v1          *zwlr_screencopy_manager;
   struct hyprland_toplevel_export_manager_v1 *hyprland_toplevel_export_manager;
-  struct zwlr_foreign_toplevel_manager_v1    *zwlr_toplevel_manager;
   struct wl_buffer                           *wl_buffer;
   struct wl_output                           *wl_output;
 
@@ -93,14 +73,19 @@ struct peekaboo {
   struct wl_list                             outputs;
   struct wl_list                             seats;
   struct wl_list                             toplevel_handles;
-  struct wl_list                             previews;
+  struct wl_list                             wm_clients;
 
 
   struct surface_buffer_pool                 surface_buffer_pool;
   uint32_t                                   surface_height;
   uint32_t                                   surface_width;
 
+  void                                       (*request_frame)(struct peekaboo* peekaboo);
+
+  char                                       input[MAX_INPUT_LENGTH];
+  size_t                                     input_size;
   bool                                       running;
+  struct wm_client                           *selected_client;
 };
 
 #endif /* _PEEKABOO_H_ */
