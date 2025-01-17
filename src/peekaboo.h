@@ -36,18 +36,25 @@ struct toplevel_handle {
 };
 
 struct config {
-  int32_t preview_window_width;
-  int32_t preview_window_height;
-  int32_t preview_window_margin_x;
-  int32_t preview_window_margin_y;
-  int32_t preview_window_padding_x;
-  int32_t preview_window_padding_y;
-  int32_t preview_window_border_stroke_size;
+  int32_t  preview_window_width;
+  int32_t  preview_window_height;
+  int32_t  preview_window_margin_x;
+  int32_t  preview_window_margin_y;
+  int32_t  preview_window_padding_x;
+  int32_t  preview_window_padding_y;
+  int32_t  preview_window_border_stroke_size;
   uint32_t preview_window_background_color;
+  uint32_t preview_window_border_radius;
+  uint32_t preview_window_title_foreground_color;
+  uint32_t preview_window_title_background_color;
+  uint32_t shortcut_foreground_color;
+  uint32_t shortcut_background_color;
+  int32_t shortcut_padding_x;
 };
 
 struct peekaboo {
   struct config                              config;
+
   struct wl_display                          *wl_display;
   struct wl_registry                         *wl_registry;
   struct wl_compositor                       *wl_compositor;
@@ -62,7 +69,8 @@ struct peekaboo {
   struct zxdg_output_manager_v1              *xdg_output_manager;
   struct hyprland_toplevel_export_manager_v1 *hyprland_toplevel_export_manager;
   struct wl_buffer                           *wl_buffer;
-  struct wl_output                           *wl_output;
+
+  struct output                              *current_output;
 
   struct wl_shm                              *wl_shm;
   struct wl_shm_pool                         *wl_shm_pool;

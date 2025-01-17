@@ -47,7 +47,6 @@ static void send_frame(struct peekaboo *peekaboo) {
   if (surface_buffer == NULL) {
     return;
   }
-  surface_buffer->state = SURFACE_BUFFER_BUSY;
 
   render(peekaboo, surface_buffer);
 
@@ -66,7 +65,6 @@ static void noop(void) {}
 
 static void surface_callback_done(void *data, struct wl_callback *callback,
                                   uint32_t callback_data) {
-  log_debug("Surface callback done\n");
   struct peekaboo *peekaboo = data;
   send_frame(peekaboo);
 
@@ -135,6 +133,7 @@ static void handle_keyboard_modifiers(void *data, struct wl_keyboard *keyboard,
                         mods_locked, 0, 0, group);
 }
 
+/* TODO: Account for keys repeating. */
 static void handle_keyboard_key(void *data, struct wl_keyboard *wl_keyboard,
                                 uint32_t serial, uint32_t time, uint32_t key,
                                 uint32_t state) {
@@ -204,8 +203,6 @@ static void handle_layer_surface_configure(
   peekaboo->surface_height = height;
   zwlr_layer_surface_v1_ack_configure(layer_surface, serial);
 
-  log_debug("Configuring layer_surface\n");
-
   if (peekaboo->running) {
     send_frame(peekaboo);
   }
@@ -272,6 +269,33 @@ const static struct zxdg_output_v1_listener xdg_output_listener = {
     .description = (void *)noop,
 };
 
+static struct output *find_output_from_wl_output(struct wl_list *outputs,
+                                                 struct wl_output *wl_output) {
+  struct output *output;
+  wl_list_for_each(output, outputs, link) {
+    if (wl_output == output->wl_output) {
+      return output;
+    }
+  }
+
+  return NULL;
+}
+
+static void handle_surface_enter(void *data, struct wl_surface *surface,
+                                 struct wl_output *wl_output) {
+  struct peekaboo *peekaboo = data;
+  struct output *output =
+      find_output_from_wl_output(&peekaboo->outputs, wl_output);
+  peekaboo->current_output = output;
+}
+
+static const struct wl_surface_listener surface_listener = {
+    .enter = handle_surface_enter,
+    .leave = (void *)noop,
+    .preferred_buffer_transform = (void *)noop,
+    .preferred_buffer_scale = (void *)noop,
+};
+
 static void registry_global(void *data, struct wl_registry *registry,
                             uint32_t name, const char *interface,
                             uint32_t version) {
@@ -290,8 +314,8 @@ static void registry_global(void *data, struct wl_registry *registry,
   /* zwlr_layer_shell */
   else if (!strcmp(interface, zwlr_layer_shell_v1_interface.name)) {
     peekaboo->wl_layer_shell =
-        wl_registry_bind(registry, name, &zwlr_layer_shell_v1_interface, 2);
-    log_debug("Bound to wl_layer_shell %u.\n", name);
+        wl_registry_bind(registry, name, &zwlr_layer_shell_v1_interface, 5);
+    log_debug("Bound to zwlr_layer_shell %u.\n", name);
   }
   /* wl_seat */
   else if (!strcmp(interface, wl_seat_interface.name)) {
@@ -315,9 +339,6 @@ static void registry_global(void *data, struct wl_registry *registry,
     struct output *output = calloc(1, sizeof(struct output));
     output->wl_output = wl_output;
     output->scale = 1;
-
-    /* TODO: Select output correctly */
-    peekaboo->wl_output = wl_output;
 
     wl_output_add_listener(output->wl_output, &output_listener, output);
     wl_list_insert(&peekaboo->outputs, &output->link);
@@ -352,20 +373,59 @@ static const struct wl_registry_listener wl_registry_listener = {
     .global_remove = registry_global_remove,
 };
 
+static void free_seats(struct wl_list *seats) {
+  struct seat *seat;
+  struct seat *tmp;
+  wl_list_for_each_safe(seat, tmp, seats, link) {
+    if (seat->wl_keyboard != NULL) {
+      wl_keyboard_destroy(seat->wl_keyboard);
+    }
+
+    if (seat->xkb_state != NULL) {
+      xkb_state_unref(seat->xkb_state);
+    }
+    if (seat->xkb_keymap != NULL) {
+      xkb_keymap_unref(seat->xkb_keymap);
+    }
+    xkb_context_unref(seat->xkb_context);
+
+    wl_seat_destroy(seat->wl_seat);
+    wl_list_remove(&seat->link);
+    free(seat);
+  }
+}
+
+static void free_outputs(struct wl_list *outputs) {
+  struct output *output;
+  struct output *tmp;
+  wl_list_for_each_safe(output, tmp, outputs, link) {
+    wl_output_destroy(output->wl_output);
+    zxdg_output_v1_destroy(output->xdg_output);
+    wl_list_remove(&output->link);
+    free(output->name);
+    free(output);
+  }
+}
+
 int main(int argc, char **argv) {
   struct peekaboo peekaboo = {
       .config =
           {
               .preview_window_width = 800,
               .preview_window_height = 600,
-              .preview_window_padding_x = 5,
+              .preview_window_padding_x = 20,
               .preview_window_padding_y = 5,
-              .preview_window_margin_x = 10,
-              .preview_window_margin_y = 10,
-              .preview_window_border_stroke_size = 4,
-              .preview_window_background_color = 0x84a6c9,
+              .preview_window_margin_x = 20,
+              .preview_window_margin_y = 20,
+              .preview_window_border_stroke_size = 2,
+              .preview_window_background_color = 0x99c1b9c0,
+              .preview_window_border_radius = 10,
+              .preview_window_title_background_color = 0xa882ddff,
+              .preview_window_title_foreground_color = 0xffdde1ff,
+              .shortcut_foreground_color = 0xffdde1ff,
+              .shortcut_background_color = 0xa882ddff,
+              .shortcut_padding_x = 5,
           },
-      .wl_output = NULL,
       .wl_display = NULL,
       .wl_registry = NULL,
       .wl_compositor = NULL,
@@ -406,7 +466,6 @@ int main(int argc, char **argv) {
   EXPECT_NON_NULL(peekaboo.wl_layer_shell, "zwlr_layer_shell_v1");
   EXPECT_NON_NULL(peekaboo.xdg_output_manager, "xdg_output_manager");
   EXPECT_NON_NULL(peekaboo.wp_viewporter, "wp_viewporter");
-  EXPECT_NON_NULL(peekaboo.wl_output, "wl_output");
   EXPECT_NON_NULL(peekaboo.hyprland_toplevel_export_manager,
                   "hyprland_toplevel_export_manager");
 
@@ -472,11 +531,13 @@ int main(int argc, char **argv) {
 
   surface_buffer_pool_init(&peekaboo.surface_buffer_pool);
   peekaboo.wl_surface = wl_compositor_create_surface(peekaboo.wl_compositor);
-  /* wl_surface_add_listener(peekaboo.wl_surface, &surface_listener, &peekaboo);
-   */
+  wl_surface_add_listener(peekaboo.wl_surface, &surface_listener, &peekaboo);
+
   peekaboo.wl_layer_surface = zwlr_layer_shell_v1_get_layer_surface(
-      peekaboo.wl_layer_shell, peekaboo.wl_surface, peekaboo.wl_output,
-      ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "peekaboo");
+      peekaboo.wl_layer_shell, peekaboo.wl_surface,
+      peekaboo.current_output == NULL ? NULL
+                                      : peekaboo.current_output->wl_output,
+      ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "selection");
   zwlr_layer_surface_v1_add_listener(peekaboo.wl_layer_surface,
                                      &wl_layer_surface_listener, &peekaboo);
   zwlr_layer_surface_v1_set_exclusive_zone(peekaboo.wl_layer_surface, -1);
@@ -485,21 +546,52 @@ int main(int argc, char **argv) {
                                        ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT |
                                        ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
                                        ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM);
-  zwlr_layer_surface_v1_set_keyboard_interactivity(peekaboo.wl_layer_surface,
-                                                   true);
+  zwlr_layer_surface_v1_set_keyboard_interactivity(
+      peekaboo.wl_layer_surface,
+      // We need this otherwise the focuswindow dispatch won't actually focus
+      // the keyboard on the new window.
+      ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND);
 
   wl_surface_commit(peekaboo.wl_surface);
 
-  while (peekaboo.running && wl_display_dispatch(peekaboo.wl_display) != -1) {
+  while (wl_display_dispatch(peekaboo.wl_display) != -1) {
+    if (!peekaboo.running) {
+      break;
+    }
   }
-
   if (peekaboo.selected_client != NULL) {
     wm_client_focus(peekaboo.selected_client);
   }
 
+#ifdef DEBUG
   /* Cleanup */
+  wl_compositor_destroy(peekaboo.wl_compositor);
+  wl_shm_destroy(peekaboo.wl_shm);
+  zwlr_layer_shell_v1_destroy(peekaboo.wl_layer_shell);
+
+  free_seats(&peekaboo.seats);
+  free_outputs(&peekaboo.outputs);
+
+  zxdg_output_manager_v1_destroy(peekaboo.xdg_output_manager);
+  wp_viewporter_destroy(peekaboo.wp_viewporter);
+  hyprland_toplevel_export_manager_v1_destroy(
+      peekaboo.hyprland_toplevel_export_manager);
+
+  if (peekaboo.wl_surface_callback) {
+    wl_callback_destroy(peekaboo.wl_surface_callback);
+  }
+
+  zwlr_layer_surface_v1_destroy(peekaboo.wl_layer_surface);
+
+  wl_registry_destroy(peekaboo.wl_registry);
+
+  wl_surface_destroy(peekaboo.wl_surface);
+
   wm_clients_destroy(&peekaboo.wm_clients, WM_CLIENT_HYPRLAND);
   surface_buffer_pool_destroy(&peekaboo.surface_buffer_pool);
+
+  log_debug("Cleanup finished\n");
+#endif /* DEBUG */
 
   wl_display_disconnect(peekaboo.wl_display);
 

@@ -10,49 +10,81 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 #include <wayland-client-core.h>
 #include <wayland-util.h>
 
-void noop() {}
+static void noop() {}
 
-/* Used to get the list of hyprland clients. This is really quite a janky
- * solution. We should be writing to the hyprland socket instead, but I'm having
- * trouble figuring out what to send to the socket to receive the clients.
- * Preliminary testing with `echo "/clients" socat - UNIX-CONNECT:/path` has
- * given me an unknown request output.
- * TODO: Write to socket to get list of hyprland clients instead. */
-char *run_command(const char *command) {
-  FILE *pipe;
-  char buffer[128];
-  size_t total_size = 0;
-  char *result = NULL;
+char *send_hyprland_socket(const char *command) {
+  int sockfd;
+  struct sockaddr_un addr;
 
-  // Open a pipe to run the command
-  pipe = popen(command, "r");
-  if (!pipe) {
-    perror("popen failed");
-    return NULL;
+  char socket_path[256] = {0};
+  const char *xdg_runtime_dir = getenv("XDG_RUNTIME_DIR");
+  const char *hyprland_instance_signature =
+      getenv("HYPRLAND_INSTANCE_SIGNATURE");
+  sprintf(socket_path, "%s/hypr/%s/.socket.sock", xdg_runtime_dir,
+          hyprland_instance_signature);
+
+  log_debug("Connecting to unix socket at: %s\n", socket_path);
+
+  sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (sockfd == -1) {
+    perror("socket");
+    exit(EXIT_FAILURE);
   }
 
-  // Read the command's output into the buffer and concatenate it into result
-  while (fgets(buffer, sizeof(buffer), pipe)) {
-    size_t len = strlen(buffer);
-    char *new_result = realloc(result, total_size + len + 1);
-    if (!new_result) {
-      perror("realloc failed");
-      free(result);
-      pclose(pipe);
-      return NULL;
+  memset(&addr, 0, sizeof(struct sockaddr_un));
+  addr.sun_family = AF_UNIX;
+  strncpy(addr.sun_path, socket_path, sizeof(addr.sun_path) - 1);
+
+  if (connect(sockfd, (struct sockaddr *)&addr, sizeof(struct sockaddr_un)) ==
+      -1) {
+    perror("connect");
+    close(sockfd);
+    exit(EXIT_FAILURE);
+  }
+
+  if (write(sockfd, command, strlen(command)) == -1) {
+    perror("write");
+    close(sockfd);
+    exit(EXIT_FAILURE);
+  }
+
+  ssize_t num_bytes;
+  char buffer[1024];
+  char *response = NULL;
+  size_t response_size = 0;
+
+  // Read the response in chunks
+  while ((num_bytes = read(sockfd, buffer, 1024)) > 0) {
+    char *temp = realloc(response,
+                         response_size + num_bytes + 1); // Allocate more memory
+    if (!temp) {
+      perror("realloc");
+      free(response);
+      close(sockfd);
+      exit(EXIT_FAILURE);
     }
-
-    result = new_result;
-    strcpy(result + total_size, buffer);
-    total_size += len;
+    response = temp;
+    memcpy(response + response_size, buffer, num_bytes); // Append new data
+    response_size += num_bytes;
   }
 
-  pclose(pipe);
-  return result;
+  if (num_bytes == -1) {
+    perror("read");
+    free(response);
+    close(sockfd);
+    exit(EXIT_FAILURE);
+  }
+
+  response[response_size] = '\0';
+  close(sockfd);
+
+  return response;
 }
 
 static void handle_hyprland_toplevel_export_frame_buffer(
@@ -160,12 +192,6 @@ void handle_hyprland_toplevel_export_frame_ready(
     if (hyprland_client->toplevel_export_frame ==
         hyprland_toplevel_export_frame) {
       wm_client->ready = true;
-
-      log_debug("Trying to capture next export_frame\n");
-      hyprland_client->toplevel_export_frame =
-          hyprland_toplevel_export_manager_v1_capture_toplevel(
-              peekaboo->hyprland_toplevel_export_manager, 0,
-              hyprland_client->address);
     }
   }
 
@@ -188,10 +214,31 @@ const struct hyprland_toplevel_export_frame_v1_listener
         .buffer_done = handle_hyprland_toplevel_export_frame_buffer_done,
 };
 
+static const char character_pool[] = {'f', 'j', 'd', 'k', 's', 'l', 'a', ';'};
+
+/* Generate a set of characters to be pressed.
+ * Essentially does base conversion with the character_pool acting as the base,
+ * but with the additional constraint that every string generated with
+ * 0 <= index <= total while be mutually prefix-free. In other words, for a
+ * fixed `total`, we won't generate strings like 'f' and 'ff' together. */
+void generate_key_shortcut(uint32_t index, uint32_t total, char *into) {
+  uint32_t into_index = 0;
+  uint32_t character_pool_size = sizeof(character_pool);
+  /* Honestly, I'm not sure how this works or even _that_ this works. I just
+   * decided to try this line while brainstorming how to implement and it
+   * seems to give pretty good shortcuts. It doesn't pack sequences as tightly
+   * as possible though.
+   * TODO: Improve this algorithm. */
+  index += total;
+  do {
+    into[into_index++] = character_pool[index % character_pool_size];
+    index /= character_pool_size;
+  } while (index > 0);
+}
 
 void hyprland_clients_init(struct peekaboo *peekaboo,
                            struct wl_list *wm_clients) {
-  char *clients_str = run_command("hyprctl clients -j");
+  char *clients_str = send_hyprland_socket("-j/clients");
   cJSON *clients_json = cJSON_Parse(clients_str);
 
   if (!cJSON_IsArray(clients_json)) {
@@ -200,29 +247,27 @@ void hyprland_clients_init(struct peekaboo *peekaboo,
   }
 
   cJSON *client = clients_json->child;
-  char key = 'a';
+  uint32_t num_clients = 0;
+  struct wm_client *wm_client;
+  struct hyprland_client *hyprland_client;
   while (client != NULL) {
     if (!cJSON_IsObject(client)) {
       log_warning("Unexpected hyprctl result\n");
       return;
     }
     cJSON *hyprland_client_entry = client->child;
-    struct wm_client *wm_client = calloc(1, sizeof(struct wm_client));
-    struct hyprland_client *hyprland_client =
-        calloc(1, sizeof(struct hyprland_client));
+    wm_client = calloc(1, sizeof(struct wm_client));
+    hyprland_client = calloc(1, sizeof(struct hyprland_client));
     hyprland_client->address = -1;
     wm_client->peekaboo = peekaboo;
     wm_client->wm_client_type = WM_CLIENT_HYPRLAND;
     wm_client->client = hyprland_client;
     wm_client->ready = false;
-    // TODO: Assign proper shortcut
-    wm_client->shortcut_keys[0] = key++;
 
     while (hyprland_client_entry != NULL) {
       if (strcmp(hyprland_client_entry->string, "address") == 0 &&
           // We're given a hex string in the form "0xabcdef".
           cJSON_IsString(hyprland_client_entry)) {
-        log_debug("Found address at %s\n", hyprland_client_entry->valuestring);
         hyprland_client->address =
             strtoull(hyprland_client_entry->valuestring, NULL, 0);
       } else if (strcmp(hyprland_client_entry->string, "title") == 0 &&
@@ -233,8 +278,6 @@ void hyprland_clients_init(struct peekaboo *peekaboo,
 
       hyprland_client_entry = hyprland_client_entry->next;
     }
-    log_debug("Registering listener for %s at address 0x%lx\n",
-              wm_client->title, hyprland_client->address);
     /* Create an export frame for the client and listen on the export
      * frame for their buffer. */
     hyprland_client->toplevel_export_frame =
@@ -247,9 +290,20 @@ void hyprland_clients_init(struct peekaboo *peekaboo,
 
     wl_list_insert(wm_clients, &wm_client->link);
     client = client->next;
+    num_clients++;
   }
-  cJSON_free(clients_json);
+
+  cJSON_Delete(clients_json);
   free(clients_str);
+
+  /* We have to do another loop here to generate the shortcut keys. This is
+   * because the shortcut key generation depends on the total number of items
+   * that will be generated. */
+  uint32_t i = 0;
+  wl_list_for_each(wm_client, wm_clients, link) {
+    generate_key_shortcut(i, num_clients, wm_client->shortcut_keys);
+    i++;
+  }
 
   /* Don't make roundtrip here. Let caller do it. */
 }
@@ -257,17 +311,34 @@ void hyprland_clients_init(struct peekaboo *peekaboo,
 void hyprland_clients_destroy(struct wl_list *wm_clients) {
   struct wm_client *wm_client;
   struct wm_client *tmp;
+  struct hyprland_client *hyprland_client;
   wl_list_for_each_safe(wm_client, tmp, wm_clients, link) {
+    hyprland_client = wm_client->client;
+    if (wm_client->wl_buffer) {
+      wl_buffer_destroy(wm_client->wl_buffer);
+    }
+    if (wm_client->buf) {
+      munmap(wm_client->buf, wm_client->height * wm_client->stride);
+    }
+    if (hyprland_client->toplevel_export_frame) {
+      hyprland_toplevel_export_frame_v1_destroy(
+          hyprland_client->toplevel_export_frame);
+    }
+
     free(wm_client->client);
     free(wm_client);
   }
 }
 
 void hyprland_client_focus(struct wm_client *wm_client) {
-  char command[WM_CLIENT_MAX_TITLE_LENGTH + 64];
+  char command[WM_CLIENT_MAX_TITLE_LENGTH + 64] = {0};
   struct hyprland_client *hyprland_client = wm_client->client;
-  sprintf(command, "hyprctl dispatch focuswindow address:0x%lx",
+  sprintf(command, "/dispatch focuswindow address:0x%lx",
           hyprland_client->address);
-  char *res = run_command(command);
-  free(res);
+
+  char *response = send_hyprland_socket(command);
+  if (strcmp(response, "ok") != 0) {
+    log_error("Could not focus window\n");
+    exit(EXIT_FAILURE);
+  }
 }

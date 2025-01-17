@@ -1,13 +1,10 @@
 #include "surface.h"
-
 #include "log.h"
-
-#include "pango/pango-font.h"
-#include "pango/pango-layout.h"
 #include "shm.h"
 #include <cairo/cairo.h>
-#include <errno.h>
 #include <fcntl.h>
+#include <pango/pango-font.h>
+#include <pango/pango-layout.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -62,11 +59,49 @@ static struct surface_buffer *surface_buffer_init(struct wl_shm *wl_shm,
       buffer->data, CAIRO_SURFACE_FORMAT, width, height, stride);
   buffer->cairo = cairo_create(buffer->cairo_surface);
 
-  buffer->pango_layout = pango_cairo_create_layout(buffer->cairo);
-  PangoFontDescription *font_desc =
-      pango_font_description_from_string("Sans Bold 16");
-  pango_layout_set_font_description(buffer->pango_layout, font_desc);
-  pango_font_description_free(font_desc);
+  /* buffer->pango_layout = pango_cairo_create_layout(buffer->cairo); */
+  /* PangoFontDescription *font_desc = */
+  /* pango_font_description_from_string("Comic Code 16"); */
+  /* pango_layout_set_font_description(buffer->pango_layout, font_desc); */
+  /* pango_font_description_free(font_desc); */
+
+  log_debug("Creating Pango context.\n");
+  PangoContext *context = pango_cairo_create_context(buffer->cairo);
+
+  log_debug("Creating Pango font description.\n");
+  PangoFontDescription *font_description =
+      pango_font_description_from_string("Comic Code");
+  pango_font_description_set_size(font_description, 16 * PANGO_SCALE);
+  /* if (entry->font_variations[0] != 0) { */
+  /* pango_font_description_set_variations( */
+  /* font_description, */
+  /* entry->font_variations); */
+  /* } */
+  pango_context_set_font_description(context, font_description);
+
+  buffer->pango_layout = pango_layout_new(context);
+
+  /* if (entry->font_features[0] != 0) { */
+  /* log_debug("Setting font features.\n"); */
+  /* PangoAttribute *attr = pango_attr_font_features_new(entry->font_features);
+   */
+  /* PangoAttrList *attr_list = pango_attr_list_new(); */
+  /* pango_attr_list_insert(attr_list, attr); */
+  /* pango_layout_set_attributes(entry->pango.layout, attr_list); */
+  /* } */
+
+  log_debug("Loading Pango font.\n");
+  PangoFontMap *map = pango_cairo_font_map_get_default();
+  PangoFont *font = pango_font_map_load_font(map, context, font_description);
+  PangoFontMetrics *metrics = pango_font_get_metrics(font, NULL);
+
+  pango_font_metrics_unref(metrics);
+  g_object_unref(font);
+  log_debug("Loaded.\n");
+
+  pango_font_description_free(font_description);
+
+  buffer->pango_context = context;
 
   return buffer;
 }
@@ -93,7 +128,14 @@ static void surface_buffer_destroy(struct surface_buffer *buffer) {
   }
 
   if (buffer->pango_layout) {
+    // This fixes a lot of memory leaks. Probably because pango uses this
+    // internally and doesn't free it itself.
+    g_object_unref(pango_cairo_font_map_get_default());
     g_object_unref(buffer->pango_layout);
+  }
+
+  if (buffer->pango_context) {
+    g_object_unref(buffer->pango_context);
   }
 
   memset(buffer, 0, sizeof(struct surface_buffer));

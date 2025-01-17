@@ -21,6 +21,7 @@ struct surface_buffer {
   cairo_t *cairo;
   void *data;
   PangoLayout *pango_layout;
+  PangoContext *pango_context;
   size_t data_size;
   uint32_t width;
   uint32_t height;
