@@ -1,5 +1,6 @@
 #include "vec.h"
 #include <stdlib.h>
+#include <string.h>
 
 struct vec *vec_init() {
   struct vec *vec = malloc(sizeof(struct vec));
@@ -12,9 +13,7 @@ struct vec *vec_init() {
 
 void vec_destroy(struct vec *vec) {
   free(vec->items);
-  vec->count = 0;
-  vec->_capacity = 0;
-  vec->items = NULL;
+  memset(vec, 0, sizeof(struct vec));
   free(vec);
 }
 

@@ -59,36 +59,17 @@ static struct surface_buffer *surface_buffer_init(struct wl_shm *wl_shm,
       buffer->data, CAIRO_SURFACE_FORMAT, width, height, stride);
   buffer->cairo = cairo_create(buffer->cairo_surface);
 
-  /* buffer->pango_layout = pango_cairo_create_layout(buffer->cairo); */
-  /* PangoFontDescription *font_desc = */
-  /* pango_font_description_from_string("Comic Code 16"); */
-  /* pango_layout_set_font_description(buffer->pango_layout, font_desc); */
-  /* pango_font_description_free(font_desc); */
-
   log_debug("Creating Pango context.\n");
   PangoContext *context = pango_cairo_create_context(buffer->cairo);
 
+  // TODO: Make this configurable
   log_debug("Creating Pango font description.\n");
   PangoFontDescription *font_description =
       pango_font_description_from_string("Comic Code");
   pango_font_description_set_size(font_description, 16 * PANGO_SCALE);
-  /* if (entry->font_variations[0] != 0) { */
-  /* pango_font_description_set_variations( */
-  /* font_description, */
-  /* entry->font_variations); */
-  /* } */
   pango_context_set_font_description(context, font_description);
 
   buffer->pango_layout = pango_layout_new(context);
-
-  /* if (entry->font_features[0] != 0) { */
-  /* log_debug("Setting font features.\n"); */
-  /* PangoAttribute *attr = pango_attr_font_features_new(entry->font_features);
-   */
-  /* PangoAttrList *attr_list = pango_attr_list_new(); */
-  /* pango_attr_list_insert(attr_list, attr); */
-  /* pango_layout_set_attributes(entry->pango.layout, attr_list); */
-  /* } */
 
   log_debug("Loading Pango font.\n");
   PangoFontMap *map = pango_cairo_font_map_get_default();

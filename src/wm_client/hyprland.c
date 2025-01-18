@@ -3,7 +3,9 @@
 #include "../peekaboo.h"
 #include "../shm.h"
 #include "assert.h"
+#include "cairo.h"
 #include "hyprland-toplevel-export-v1.h"
+#include "src/surface_cache.h"
 #include "wm_client.h"
 #include <cjson/cJSON.h>
 #include <stdio.h>
@@ -191,6 +193,11 @@ void handle_hyprland_toplevel_export_frame_ready(
     hyprland_client = wm_client->client;
     if (hyprland_client->toplevel_export_frame ==
         hyprland_toplevel_export_frame) {
+      // TODO: Check the format is compatible
+      wm_client->orig_surface = cairo_image_surface_create_for_data(
+          wm_client->buf, CAIRO_FORMAT_ARGB32, wm_client->width,
+          wm_client->height, wm_client->stride);
+      wm_client->surface_cache = surface_cache_create(wm_client->orig_surface);
       wm_client->ready = true;
     }
   }
@@ -317,6 +324,12 @@ void hyprland_clients_destroy(struct wl_list *wm_clients) {
     if (wm_client->wl_buffer) {
       wl_buffer_destroy(wm_client->wl_buffer);
     }
+    if (wm_client->surface_cache) {
+      surface_cache_destroy(wm_client->surface_cache);
+    }
+    if (wm_client->orig_surface) {
+      cairo_surface_destroy(wm_client->orig_surface);
+    }
     if (wm_client->buf) {
       munmap(wm_client->buf, wm_client->height * wm_client->stride);
     }
@@ -341,4 +354,5 @@ void hyprland_client_focus(struct wm_client *wm_client) {
     log_error("Could not focus window\n");
     exit(EXIT_FAILURE);
   }
+  free(response);
 }

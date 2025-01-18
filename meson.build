@@ -45,6 +45,10 @@ common_sources = files(
   'src/preview.c',
   'src/wm_client/wm_client.c',
   'src/wm_client/hyprland.c',
+  'src/layout.c',
+  'src/vec.c',
+  'src/util.c',
+  'src/surface_cache.c',
 )
 
 cc = meson.get_compiler('c')

@@ -133,10 +133,9 @@ static void handle_keyboard_modifiers(void *data, struct wl_keyboard *keyboard,
                         mods_locked, 0, 0, group);
 }
 
-/* TODO: Account for keys repeating. */
 static void handle_keyboard_key(void *data, struct wl_keyboard *wl_keyboard,
                                 uint32_t serial, uint32_t time, uint32_t key,
-                                uint32_t state) {
+                                uint32_t key_state) {
   struct seat *seat = data;
 
   const xkb_keycode_t key_code = key + 8;
@@ -148,8 +147,13 @@ static void handle_keyboard_key(void *data, struct wl_keyboard *wl_keyboard,
       xkb_state_key_get_one_sym(seat->xkb_state, key_code);
   char ch = xkb_state_key_get_utf32(seat->xkb_state, key_code);
 
-  bool needs_redraw = handle_key(seat->peekaboo, key_sym, ch);
-  if (needs_redraw) {
+  // Not going to handle keys repeating.
+  if (key_state != WL_KEYBOARD_KEY_STATE_PRESSED) {
+    return;
+  }
+
+  bool redraw = handle_key(seat->peekaboo, key_sym, ch);
+  if (redraw) {
     request_frame(seat->peekaboo);
   }
 }
@@ -408,34 +412,70 @@ static void free_outputs(struct wl_list *outputs) {
 }
 
 int main(int argc, char **argv) {
-  struct peekaboo peekaboo = {
-      .config =
+  struct peekaboo
+      peekaboo =
           {
-              .preview_window_width = 800,
-              .preview_window_height = 600,
-              .preview_window_padding_x = 20,
-              .preview_window_padding_y = 5,
-              .preview_window_margin_x = 20,
-              .preview_window_margin_y = 20,
-              .preview_window_border_stroke_size = 2,
-              .preview_window_background_color = 0x99c1b9c0,
-              .preview_window_border_radius = 10,
-              .preview_window_title_background_color = 0xa882ddff,
-              .preview_window_title_foreground_color = 0xffdde1ff,
-              .shortcut_foreground_color = 0xffdde1ff,
-              .shortcut_background_color = 0xa882ddff,
-              .shortcut_padding_x = 5,
-          },
-      .wl_display = NULL,
-      .wl_registry = NULL,
-      .wl_compositor = NULL,
-      .wl_shm = NULL,
-      .wl_layer_shell = NULL,
-      .wl_surface = NULL,
-      .request_frame = request_frame,
-      .running = true,
-      .selected_client = NULL,
-  };
+              .config =
+                  {
+                      .client_filter_behavior = CLIENT_FILTER_BEHAVIOR_HIDE,
+                      .peekaboo = {.style =
+                                       {
+                                           .padding = {.top = 30,
+                                                       .bottom = 30,
+                                                       .left = 200,
+                                                       .right = 200},
+                                       }},
+                      .preview = {.style =
+                                      {
+                                          .padding = {.top = 5,
+                                                      .bottom = 5,
+                                                      .left = 20,
+                                                      .right = 20},
+                                          .margin = {.top = 20,
+                                                     .bottom = 20,
+                                                     .left = 20,
+                                                     .right = 20},
+                                          .background_color = 0x99c1b9c0,
+                                          .background_corner_radius = 10,
+                                      }},
+                      .preview_title =
+                          {.style =
+                               {
+                                   .foreground_color = 0xffdde1ff,
+                                   .highlight_color = 0xffdde1ff,
+                                   .background_color = 0xa882ddff,
+                                   .padding =
+                                       {.top = 0, .bottom = 0, .left = 0, .right = 0},
+                                   .margin =
+                                       {.top = 0, .bottom = 10, .left = 0, .right = 0},
+                               }},
+                      .shortcut =
+                          {
+                              .style =
+                                  {
+                                      .foreground_color = 0xffdde1ff,
+                                      .highlight_color = 0xb882ddff,
+                                      .background_color = 0xa882ddff,
+                                      .padding = {.top = 0,
+                                                  .bottom = 0,
+                                                  .left = 5,
+                                                  .right =
+                                                      5},
+                                      .margin = {.top = 5,
+                                                 .right = 5},
+                                      .background_corner_radius = 5,
+                                  }},
+                  },
+              .wl_display = NULL,
+              .wl_registry = NULL,
+              .wl_compositor = NULL,
+              .wl_shm = NULL,
+              .wl_layer_shell = NULL,
+              .wl_surface = NULL,
+              .request_frame = request_frame,
+              .running = true,
+              .selected_client = NULL,
+          };
 
   wl_list_init(&peekaboo.outputs);
   wl_list_init(&peekaboo.seats);
@@ -511,7 +551,12 @@ int main(int argc, char **argv) {
    */
   wm_clients_init(&peekaboo, &peekaboo.wm_clients, WM_CLIENT_HYPRLAND);
 
-  /* Third roundtrip. */
+  /* Third roundtrip.
+   * This isn't strictly required; we can skip straight to rendering, which
+   * may make the preview cards show up faster, but the previews itself will
+   * show up a bit later because we wouldn't have done a roundtrip to first
+   * request the buffers. Play around with this and maybe give a config option
+   * to allow skipping this step. */
   log_debug("Starting third roundtrip\n");
   log_indent();
   wl_display_roundtrip(peekaboo.wl_display);
