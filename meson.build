@@ -1,7 +1,7 @@
 project(
   'peekaboo',
   'c',
-  version: '0.9.1',
+  version: '0.1.0',
   license: 'MIT',
   meson_version: '>=0.61.0',
   default_options: [
@@ -18,7 +18,12 @@ project(
 
 debug = get_option('buildtype').startswith('debug')
 if debug
-  add_project_arguments('-DDEBUG', language : 'c')
+  add_project_arguments(
+    '-DDEBUG',
+    # these are so noisy
+    # '-DDEBUG_RENDERS',
+    language : 'c'
+  )
 endif
 
 config_location = join_paths(
@@ -38,7 +43,7 @@ add_project_arguments(
   language: 'c'
 )
 
-common_sources = files(
+sources = files(
   'src/log.c',
   'src/shm.c',
   'src/surface.c',
@@ -52,23 +57,17 @@ common_sources = files(
 )
 
 cc = meson.get_compiler('c')
-libm = cc.find_library('m', required: false)
+
+math = cc.find_library('m')
 cairo = dependency('cairo')
 pangocairo = dependency('pangocairo')
-wayland_client = dependency('wayland-client')
-wayland_protocols = dependency('wayland-protocols', native: true)
-wayland_scanner_dep = dependency('wayland-scanner', native: true)
 xkbcommon = dependency('xkbcommon')
 cjson = dependency('libcjson')
-glib = dependency('glib-2.0')
+wayland_client = dependency('wayland-client')
 
-if wayland_client.version().version_compare('<1.20.0')
-  add_project_arguments(
-    ['-DNO_WL_OUTPUT_NAME=1'],
-    language: 'c'
-    )
-endif
-
+# Wayland protocols {{{
+wayland_protocols = dependency('wayland-protocols', native: true)
+wayland_scanner_dep = dependency('wayland-scanner', native: true)
 
 # Generate the necessary Wayland headers / sources with wayland-scanner
 wayland_scanner = find_program(
@@ -86,7 +85,6 @@ wl_proto_xml = [
   'protocols/wlr-layer-shell-unstable-v1.xml',
   'protocols/fractional-scale-v1.xml',
   'protocols/xdg-output-unstable-v1.xml',
-  'protocols/wlr-screencopy-unstable-v1.xml',
   'protocols/hyprland-toplevel-export-v1.xml',
   'protocols/wlr-foreign-toplevel-management-unstable-v1.xml',
 ]
@@ -104,12 +102,18 @@ foreach proto : wl_proto_xml
     input: proto,
     command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'])
 endforeach
+# }}}
 
 executable(
   'peekaboo',
-  files('src/main.c'), common_sources, wl_proto_src, wl_proto_headers,
+  [
+    files('src/main.c'),
+    sources,
+    wl_proto_src,
+    wl_proto_headers,
+  ],
   dependencies: [
-    libm,
+    math,
     cairo,
     pangocairo,
     wayland_client,
@@ -118,4 +122,4 @@ executable(
   ],
   install: true
 )
-
+# vim:foldmethod=marker

@@ -1,3 +1,4 @@
+// vim:foldmethod=marker
 #include "hyprland.h"
 #include "../log.h"
 #include "../peekaboo.h"
@@ -89,12 +90,11 @@ char *send_hyprland_socket(const char *command) {
   return response;
 }
 
+// hyprland_toplevel_export_frame {{{
 static void handle_hyprland_toplevel_export_frame_buffer(
     void *data,
     struct hyprland_toplevel_export_frame_v1 *hyprland_toplevel_export_frame,
     uint32_t format, uint32_t width, uint32_t height, uint32_t stride) {
-  log_debug("hyprland_toplevel_export_frame buffer event received\n");
-
   struct peekaboo *peekaboo = data;
 
   /*
@@ -105,7 +105,7 @@ static void handle_hyprland_toplevel_export_frame_buffer(
    * for the buffer parameters. I've only seen each export_frame send one
    * buffer event, but we should probably handle multiple buffer events.
    *
-   * TODO: Handle multiple buffer events
+   * TODO: (Maybe) Handle multiple buffer events
    */
 
   struct wm_client *wm_client;
@@ -114,11 +114,23 @@ static void handle_hyprland_toplevel_export_frame_buffer(
     hyprland_client = wm_client->client;
     if (hyprland_client->toplevel_export_frame ==
         hyprland_toplevel_export_frame) {
-      /* Fill in the export_frame's fields for copying. */
-      wm_client->buffer_params_needs_update =
-          wm_client->width != width || wm_client->height != height ||
-          wm_client->stride != stride || wm_client->format != format;
 
+      /* Do I need to destroy the wl_buffer before unmapping buf? I don't know,
+       * but I'll do it anyway. */
+      if (wm_client->wl_buffer != NULL) {
+        wl_buffer_destroy(wm_client->wl_buffer);
+        wm_client->wl_buffer = NULL;
+      }
+
+      /* If we're updating an existing client, this is really the best time to
+       * free the buffer because after we set the (possibly new) buffer
+       * parameters, we'll lose track of what to unmap. */
+      if (wm_client->buf != NULL) {
+        munmap(wm_client->buf, wm_client->height * wm_client->stride);
+        wm_client->buf = NULL;
+      }
+
+      /* Fill in the export_frame's fields for copying. */
       wm_client->width = width;
       wm_client->height = height;
       wm_client->stride = stride;
@@ -130,7 +142,6 @@ static void handle_hyprland_toplevel_export_frame_buffer(
 void handle_hyprland_toplevel_export_frame_buffer_done(
     void *data,
     struct hyprland_toplevel_export_frame_v1 *hyprland_toplevel_export_frame) {
-  log_debug("hyprland_toplevel_export_frame buffer done event received\n");
   struct peekaboo *peekaboo = data;
   struct wm_client *wm_client;
   struct hyprland_client *hyprland_client;
@@ -144,13 +155,6 @@ void handle_hyprland_toplevel_export_frame_buffer_done(
       uint32_t stride = wm_client->stride;
       uint32_t format = wm_client->format;
       uint32_t data_size = wm_client->height * wm_client->stride;
-
-      if (wm_client->buffer_params_needs_update && wm_client->buf != NULL) {
-        wl_buffer_destroy(wm_client->wl_buffer);
-        munmap(wm_client->buf, wm_client->height * wm_client->stride);
-
-        wm_client->buffer_params_needs_update = false;
-      }
 
       int fd = shm_allocate_file(data_size);
       if (fd < 0) {
@@ -184,7 +188,6 @@ void handle_hyprland_toplevel_export_frame_ready(
     void *data,
     struct hyprland_toplevel_export_frame_v1 *hyprland_toplevel_export_frame,
     uint32_t tv_sec_hi, uint32_t tv_sec_lo, uint32_t tv_nsec) {
-  log_debug("hyprland_toplevel_export_frame ready event received\n");
   struct peekaboo *peekaboo = data;
 
   struct wm_client *wm_client;
@@ -193,33 +196,46 @@ void handle_hyprland_toplevel_export_frame_ready(
     hyprland_client = wm_client->client;
     if (hyprland_client->toplevel_export_frame ==
         hyprland_toplevel_export_frame) {
+      if (wm_client->surface_cache) {
+        surface_cache_destroy(wm_client->surface_cache);
+      }
+      if (wm_client->orig_surface) {
+        cairo_surface_destroy(wm_client->orig_surface);
+      }
+
       // TODO: Check the format is compatible
       wm_client->orig_surface = cairo_image_surface_create_for_data(
           wm_client->buf, CAIRO_FORMAT_ARGB32, wm_client->width,
           wm_client->height, wm_client->stride);
-      wm_client->surface_cache = surface_cache_create(wm_client->orig_surface);
+      wm_client->surface_cache = surface_cache_init(wm_client->orig_surface);
       wm_client->ready = true;
+
+      peekaboo->request_frame(peekaboo);
+      /* Refreshing currently doesn't work. We may try to render a frame while
+       * requesting the new buffer. In doing so, we release or otherwise modify
+       * resources needed for rendering the frame, causing flickering at best,
+       * and a segfault at worst. If we want to implement this a way to refresh
+       * windows, we should implement double-buffering on the wm_client
+       * buffers. Or, maybe if we memcpy the shm buffer into our own buffer? */
+      /* hyprland_clients_refresh(peekaboo, &peekaboo->wm_clients); */
     }
   }
-
-  peekaboo->request_frame(peekaboo);
 }
 
-void handle_hyprland_toplevel_export_frame_damage(
-    void *data,
-    struct hyprland_toplevel_export_frame_v1 *hyprland_toplevel_export_frame,
-    uint32_t format, uint32_t width, uint32_t height, uint32_t stride) {}
-
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
 const struct hyprland_toplevel_export_frame_v1_listener
     hyprland_toplevel_export_frame_listener = {
         .buffer = handle_hyprland_toplevel_export_frame_buffer,
-        .damage = handle_hyprland_toplevel_export_frame_damage,
+        .damage = (void *)noop,
         .flags = (void *)noop,
         .ready = handle_hyprland_toplevel_export_frame_ready,
         .failed = (void *)noop,
         .linux_dmabuf = (void *)noop,
         .buffer_done = handle_hyprland_toplevel_export_frame_buffer_done,
 };
+#pragma GCC diagnostic pop
+// }}}
 
 static const char character_pool[] = {'f', 'j', 'd', 'k', 's', 'l', 'a', ';'};
 
@@ -315,6 +331,27 @@ void hyprland_clients_init(struct peekaboo *peekaboo,
   /* Don't make roundtrip here. Let caller do it. */
 }
 
+void hyprland_clients_refresh(struct peekaboo *peekaboo,
+                              struct wl_list *wm_clients) {
+  struct wm_client *wm_client;
+  struct hyprland_client *hyprland_client;
+  wl_list_for_each(wm_client, wm_clients, link) {
+    hyprland_client = wm_client->client;
+    if (hyprland_client->toplevel_export_frame) {
+      hyprland_toplevel_export_frame_v1_destroy(
+          hyprland_client->toplevel_export_frame);
+    }
+
+    hyprland_client->toplevel_export_frame =
+        hyprland_toplevel_export_manager_v1_capture_toplevel(
+            peekaboo->hyprland_toplevel_export_manager, 0,
+            hyprland_client->address);
+    hyprland_toplevel_export_frame_v1_add_listener(
+        hyprland_client->toplevel_export_frame,
+        &hyprland_toplevel_export_frame_listener, peekaboo);
+  }
+}
+
 void hyprland_clients_destroy(struct wl_list *wm_clients) {
   struct wm_client *wm_client;
   struct wm_client *tmp;
@@ -338,7 +375,10 @@ void hyprland_clients_destroy(struct wl_list *wm_clients) {
           hyprland_client->toplevel_export_frame);
     }
 
+    memset(wm_client->client, 0, sizeof(struct hyprland_client));
     free(wm_client->client);
+
+    memset(wm_client, 0, sizeof(struct wm_client));
     free(wm_client);
   }
 }

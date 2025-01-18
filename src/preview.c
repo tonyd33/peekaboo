@@ -158,9 +158,9 @@ void render_preview(cairo_t *cr, PangoLayout *layout,
                     cairo_surface_t *base_surface, struct config *config,
                     struct wm_client *wm_client, double x, double y,
                     double width, double height) {
-#ifdef DEBUG
+#ifdef DEBUG_RENDERS
   uint32_t start_time_ms = gettime_ms();
-#endif /* DEBUG */
+#endif /* DEBUG_RENDERS */
   cairo_save(cr);
 
   // Draw the background
@@ -240,18 +240,18 @@ void render_preview(cairo_t *cr, PangoLayout *layout,
   }
 
   cairo_restore(cr);
-#ifdef DEBUG
+#ifdef DEBUG_RENDERS
   uint32_t end_time_ms = gettime_ms();
   log_debug("Rendering one preview for %s took %u ms\n", wm_client->title,
             end_time_ms - start_time_ms);
-#endif /* DEBUG */
+#endif /* DEBUG_RENDERS */
 }
 
 void render(struct peekaboo *peekaboo, struct surface_buffer *surface_buffer) {
   surface_buffer->state = SURFACE_BUFFER_BUSY;
-#ifdef DEBUG
+#ifdef DEBUG_RENDERS
   uint32_t start_time_ms = gettime_ms();
-#endif /* DEBUG */
+#endif /* DEBUG_RENDERS */
 
   cairo_t *cr = surface_buffer->cairo;
   struct config config = peekaboo->config;
@@ -324,11 +324,10 @@ void render(struct peekaboo *peekaboo, struct surface_buffer *surface_buffer) {
   layout_destroy(layout);
   cairo_restore(cr);
 
-  /* sleep(1); */
-#ifdef DEBUG
+#ifdef DEBUG_RENDERS
   uint32_t end_time_ms = gettime_ms();
   log_debug("Full render took %u ms\n", end_time_ms - start_time_ms);
-#endif /* DEBUG */
+#endif /* DEBUG_RENDERS */
   surface_buffer->state = SURFACE_BUFFER_READY;
 }
 

@@ -1,24 +1,24 @@
-#include "fractional-scale-v1.h"
-#include "hyprland-toplevel-export-v1.h"
 #include "log.h"
 #include "peekaboo.h"
 #include "preview.h"
 #include "src/surface.h"
 #include "string.h"
-#include "viewporter.h"
-#include "wlr-foreign-toplevel-management-unstable-v1.h"
-#include "wlr-layer-shell-unstable-v1.h"
-#include "wlr-screencopy-unstable-v1.h"
+#include "util.h"
 #include "wm_client/wm_client.h"
-#include "xdg-output-unstable-v1.h"
+#include <fractional-scale-v1.h>
+#include <hyprland-toplevel-export-v1.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <viewporter.h>
 #include <wayland-client-core.h>
 #include <wayland-client-protocol.h>
 #include <wayland-client.h>
 #include <wayland-util.h>
+#include <wlr-foreign-toplevel-management-unstable-v1.h>
+#include <wlr-layer-shell-unstable-v1.h>
+#include <xdg-output-unstable-v1.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 #include <xkbcommon/xkbcommon.h>
 
@@ -36,14 +36,23 @@
 #undef MIN
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 
-static void send_frame(struct peekaboo *peekaboo) {
-  // TODO: Implement fractional scaling
-  int32_t scale_120 = 120;
+static void noop(void) {}
+const struct wl_callback_listener surface_callback_listener;
 
-  struct surface_buffer *surface_buffer =
-      get_next_buffer(peekaboo->wl_shm, &peekaboo->surface_buffer_pool,
-                      peekaboo->surface_width * scale_120 / 120,
-                      peekaboo->surface_height * scale_120 / 120);
+static void send_frame(struct peekaboo *peekaboo) {
+  int32_t scale_120 = peekaboo->fractional_scale;
+  if (scale_120 == 0) {
+    // Falling back to the output scale if fractional scale is not received.
+    scale_120 =
+        (peekaboo->current_output == NULL ? 1
+                                          : peekaboo->current_output->scale) *
+        120;
+  }
+
+  struct surface_buffer *surface_buffer = get_next_buffer(
+      &peekaboo->config, peekaboo->wl_shm, &peekaboo->surface_buffer_pool,
+      peekaboo->surface_width * scale_120 / 120,
+      peekaboo->surface_height * scale_120 / 120);
   if (surface_buffer == NULL) {
     return;
   }
@@ -53,28 +62,12 @@ static void send_frame(struct peekaboo *peekaboo) {
   wl_surface_set_buffer_scale(peekaboo->wl_surface, 1);
 
   wl_surface_attach(peekaboo->wl_surface, surface_buffer->wl_buffer, 0, 0);
-  /* wp_viewport_set_destination(peekaboo->wp_viewport, peekaboo->surface_width,
-   */
-  /* peekaboo->surface_height); */
+  wp_viewport_set_destination(peekaboo->wp_viewport, peekaboo->surface_width,
+                              peekaboo->surface_height);
   wl_surface_damage(peekaboo->wl_surface, 0, 0, peekaboo->surface_width,
                     peekaboo->surface_height);
   wl_surface_commit(peekaboo->wl_surface);
 }
-
-static void noop(void) {}
-
-static void surface_callback_done(void *data, struct wl_callback *callback,
-                                  uint32_t callback_data) {
-  struct peekaboo *peekaboo = data;
-  send_frame(peekaboo);
-
-  wl_callback_destroy(peekaboo->wl_surface_callback);
-  peekaboo->wl_surface_callback = NULL;
-}
-
-const struct wl_callback_listener surface_callback_listener = {
-    .done = surface_callback_done,
-};
 
 static void request_frame(struct peekaboo *peekaboo) {
   if (peekaboo->wl_surface_callback != NULL) {
@@ -87,6 +80,22 @@ static void request_frame(struct peekaboo *peekaboo) {
   wl_surface_commit(peekaboo->wl_surface);
 }
 
+// wl_callback {{{
+static void surface_callback_done(void *data, struct wl_callback *callback,
+                                  uint32_t callback_data) {
+  struct peekaboo *peekaboo = data;
+  send_frame(peekaboo);
+
+  wl_callback_destroy(peekaboo->wl_surface_callback);
+  peekaboo->wl_surface_callback = NULL;
+}
+
+const struct wl_callback_listener surface_callback_listener = {
+    .done = surface_callback_done,
+};
+// }}}
+
+// wl_keyboard {{{
 static void handle_keyboard_keymap(void *data, struct wl_keyboard *keyboard,
                                    uint32_t format, int fd, uint32_t size) {
   struct seat *seat = data;
@@ -147,7 +156,7 @@ static void handle_keyboard_key(void *data, struct wl_keyboard *wl_keyboard,
       xkb_state_key_get_one_sym(seat->xkb_state, key_code);
   char ch = xkb_state_key_get_utf32(seat->xkb_state, key_code);
 
-  // Not going to handle keys repeating.
+  // Only handle keydown. Don't handle key repeat
   if (key_state != WL_KEYBOARD_KEY_STATE_PRESSED) {
     return;
   }
@@ -158,6 +167,8 @@ static void handle_keyboard_key(void *data, struct wl_keyboard *wl_keyboard,
   }
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
 static const struct wl_keyboard_listener wl_keyboard_listener = {
     .keymap = handle_keyboard_keymap,
     .enter = (void *)noop,
@@ -166,7 +177,30 @@ static const struct wl_keyboard_listener wl_keyboard_listener = {
     .modifiers = handle_keyboard_modifiers,
     .repeat_info = (void *)noop,
 };
+#pragma GCC diagnostic pop
+// }}}
 
+// wl_output {{{
+static void handle_output_scale(void *data, struct wl_output *wl_output,
+                                int32_t scale) {
+  struct output *output = data;
+  output->scale = scale;
+}
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+static const struct wl_output_listener output_listener = {
+    .name = (void *)noop,
+    .geometry = (void *)noop,
+    .mode = (void *)noop,
+    .scale = handle_output_scale,
+    .description = (void *)noop,
+    .done = (void *)noop,
+};
+#pragma GCC diagnostic pop
+// }}}
+
+// wl_seat {{{
 static void handle_seat_capabilities(void *data, struct wl_seat *wl_seat,
                                      uint32_t capabilities) {
   struct seat *seat = data;
@@ -176,29 +210,16 @@ static void handle_seat_capabilities(void *data, struct wl_seat *wl_seat,
   }
 }
 
-static void handle_output_scale(void *data, struct wl_output *wl_output,
-                                int32_t scale) {
-  struct output *output = data;
-  output->scale = scale;
-}
-
-const static struct wl_output_listener output_listener = {
-    .name = (void (*)(void *, struct wl_output *, const char *))noop,
-    .geometry =
-        (void (*)(void *, struct wl_output *, int32_t, int32_t, int32_t,
-                  int32_t, int32_t, const char *, const char *, int32_t))noop,
-    .mode = (void (*)(void *, struct wl_output *, uint32_t, int32_t, int32_t,
-                      int32_t))noop,
-    .scale = handle_output_scale,
-    .description = (void (*)(void *, struct wl_output *, const char *))noop,
-    .done = (void (*)(void *, struct wl_output *))noop,
-};
-
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
 const struct wl_seat_listener wl_seat_listener = {
     .name = (void *)noop,
     .capabilities = handle_seat_capabilities,
 };
+#pragma GCC diagnostic pop
+// }}}
 
+// zwlr_layer_surface {{{
 static void handle_layer_surface_configure(
     void *data, struct zwlr_layer_surface_v1 *layer_surface, uint32_t serial,
     uint32_t width, uint32_t height) {
@@ -219,30 +240,33 @@ handle_layer_surface_closed(void *data,
   peekaboo->running = false;
 }
 
-const struct zwlr_layer_surface_v1_listener wl_layer_surface_listener = {
+static const struct zwlr_layer_surface_v1_listener wl_layer_surface_listener = {
     .configure = handle_layer_surface_configure,
     .closed = handle_layer_surface_closed,
 };
+// }}}
 
-/* Upon receiving a toplevel, append it to our list. */
-void handle_zwlr_foreign_toplevel_manager_toplevel(
-    void *data,
-    struct zwlr_foreign_toplevel_manager_v1 *zwlr_foreign_toplevel_manager_v1,
-    struct zwlr_foreign_toplevel_handle_v1 *toplevel) {
+// wp_fractional_scale {{{
+static void
+fractional_scale_preferred(void *data,
+                           struct wp_fractional_scale_v1 *fractional_scale,
+                           uint32_t scale) {
   struct peekaboo *peekaboo = data;
-  struct toplevel_handle *toplevel_handle =
-      calloc(1, sizeof(struct toplevel_handle));
-  toplevel_handle->zwlr_foreign_toplevel_handle = toplevel;
+  uint32_t old_scale = peekaboo->fractional_scale;
+  peekaboo->fractional_scale = scale;
 
-  wl_list_insert(&peekaboo->toplevel_handles, &toplevel_handle->link);
+  if (old_scale != 0 && old_scale != scale) {
+    request_frame(peekaboo);
+  }
 }
 
-const struct zwlr_foreign_toplevel_manager_v1_listener
-    zwlr_foreign_toplevel_manager_listener = {
-        .toplevel = handle_zwlr_foreign_toplevel_manager_toplevel,
-        .finished = (void *)noop,
+static const struct wp_fractional_scale_v1_listener fractional_scale_listener =
+    {
+        .preferred_scale = fractional_scale_preferred,
 };
+// }}}
 
+// xdg_output {{{
 static void handle_xdg_output_logical_position(
     void *data, struct zxdg_output_v1 *xdg_output, int32_t x, int32_t y) {
   struct output *output = data;
@@ -265,14 +289,19 @@ static void handle_xdg_output_name(void *data,
   output->name = strdup(name);
 }
 
-const static struct zxdg_output_v1_listener xdg_output_listener = {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+static const struct zxdg_output_v1_listener xdg_output_listener = {
     .logical_position = handle_xdg_output_logical_position,
     .logical_size = handle_xdg_output_logical_size,
     .done = (void *)noop,
     .name = handle_xdg_output_name,
     .description = (void *)noop,
 };
+#pragma GCC diagnostic pop
+// }}}
 
+// wl_output {{{
 static struct output *find_output_from_wl_output(struct wl_list *outputs,
                                                  struct wl_output *wl_output) {
   struct output *output;
@@ -293,13 +322,18 @@ static void handle_surface_enter(void *data, struct wl_surface *surface,
   peekaboo->current_output = output;
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
 static const struct wl_surface_listener surface_listener = {
     .enter = handle_surface_enter,
     .leave = (void *)noop,
     .preferred_buffer_transform = (void *)noop,
     .preferred_buffer_scale = (void *)noop,
 };
+#pragma GCC diagnostic pop
+// }}}
 
+// wl_registry {{{
 static void registry_global(void *data, struct wl_registry *registry,
                             uint32_t name, const char *interface,
                             uint32_t version) {
@@ -369,55 +403,25 @@ static void registry_global(void *data, struct wl_registry *registry,
   }
 }
 
-static void registry_global_remove(void *data, struct wl_registry *wl_registry,
-                                   uint32_t name) {}
-
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
 static const struct wl_registry_listener wl_registry_listener = {
     .global = registry_global,
-    .global_remove = registry_global_remove,
+    .global_remove = (void *)noop,
 };
-
-static void free_seats(struct wl_list *seats) {
-  struct seat *seat;
-  struct seat *tmp;
-  wl_list_for_each_safe(seat, tmp, seats, link) {
-    if (seat->wl_keyboard != NULL) {
-      wl_keyboard_destroy(seat->wl_keyboard);
-    }
-
-    if (seat->xkb_state != NULL) {
-      xkb_state_unref(seat->xkb_state);
-    }
-    if (seat->xkb_keymap != NULL) {
-      xkb_keymap_unref(seat->xkb_keymap);
-    }
-    xkb_context_unref(seat->xkb_context);
-
-    wl_seat_destroy(seat->wl_seat);
-    wl_list_remove(&seat->link);
-    free(seat);
-  }
-}
-
-static void free_outputs(struct wl_list *outputs) {
-  struct output *output;
-  struct output *tmp;
-  wl_list_for_each_safe(output, tmp, outputs, link) {
-    wl_output_destroy(output->wl_output);
-    zxdg_output_v1_destroy(output->xdg_output);
-    wl_list_remove(&output->link);
-    free(output->name);
-    free(output);
-  }
-}
+#pragma GCC diagnostic pop
+// }}}
 
 int main(int argc, char **argv) {
+  /* TODO: Parse config dynamically */
   struct peekaboo
       peekaboo =
           {
               .config =
                   {
-                      .client_filter_behavior = CLIENT_FILTER_BEHAVIOR_HIDE,
+                      .client_filter_behavior = CLIENT_FILTER_BEHAVIOR_DIM,
+                      .font = "Sans",
+                      .font_size = 16,
                       .peekaboo = {.style =
                                        {
                                            .padding = {.top = 30,
@@ -449,22 +453,18 @@ int main(int argc, char **argv) {
                                    .margin =
                                        {.top = 0, .bottom = 10, .left = 0, .right = 0},
                                }},
-                      .shortcut =
-                          {
-                              .style =
-                                  {
-                                      .foreground_color = 0xffdde1ff,
-                                      .highlight_color = 0xb882ddff,
-                                      .background_color = 0xa882ddff,
-                                      .padding = {.top = 0,
-                                                  .bottom = 0,
-                                                  .left = 5,
-                                                  .right =
-                                                      5},
-                                      .margin = {.top = 5,
-                                                 .right = 5},
-                                      .background_corner_radius = 5,
-                                  }},
+                      .shortcut = {.style =
+                                       {
+                                           .foreground_color = 0xffdde1ff,
+                                           .highlight_color = 0xed475bff,
+                                           .background_color = 0xa882ddff,
+                                           .padding = {.top = 0,
+                                                       .bottom = 0,
+                                                       .left = 5,
+                                                       .right = 5},
+                                           .margin = {.top = 5, .right = 5},
+                                           .background_corner_radius = 5,
+                                       }},
                   },
               .wl_display = NULL,
               .wl_registry = NULL,
@@ -479,12 +479,11 @@ int main(int argc, char **argv) {
 
   wl_list_init(&peekaboo.outputs);
   wl_list_init(&peekaboo.seats);
-  wl_list_init(&peekaboo.toplevel_handles);
   wl_list_init(&peekaboo.wm_clients);
 
   /* Prepare for first roundtrip. */
 
-  /* 1. Connect to registry and add listeners. */
+  /* Connect to registry and add listeners. */
   peekaboo.wl_display = wl_display_connect(NULL);
   EXPECT_NON_NULL(peekaboo.wl_display, "Wayland compositor");
 
@@ -510,14 +509,15 @@ int main(int argc, char **argv) {
                   "hyprland_toplevel_export_manager");
 
   /* Prepare second roundtrip. */
-
-  /* 2. For every output, add listeners. */
-  struct output *output;
-  wl_list_for_each(output, &peekaboo.outputs, link) {
-    output->xdg_output = zxdg_output_manager_v1_get_xdg_output(
-        peekaboo.xdg_output_manager, output->wl_output);
-    zxdg_output_v1_add_listener(output->xdg_output, &xdg_output_listener,
-                                output);
+  {
+    /* For every output, add listeners to get logical sizes. */
+    struct output *output;
+    wl_list_for_each(output, &peekaboo.outputs, link) {
+      output->xdg_output = zxdg_output_manager_v1_get_xdg_output(
+          peekaboo.xdg_output_manager, output->wl_output);
+      zxdg_output_v1_add_listener(output->xdg_output, &xdg_output_listener,
+                                  output);
+    }
   }
 
   /* Second roundtrip */
@@ -527,51 +527,18 @@ int main(int argc, char **argv) {
   log_unindent();
   log_debug("Finished second roundtrip\n");
 
-  /* Initialize a list of clients connected to the WM.
-   *
-   * Currently, only hyprland is supported. To support another WM, the following
-   * conditions must be met:
-   * 1. There is a way to capture every toplevel surface into a buffer
-   * 2. (Optional, but nice) There is a way to associate each toplevel surface
-   *    to a title
-   * 3. There is a way to associate each toplevel in such a way that we can
-   *    later "open" or "focus" a toplevel.
-   *
-   * While there are WM-agnostic protocols for at least condition 1, I have
-   * not been able to find any WM-agnostic protocols for condition 2 or 3.
-   * The closest I've found is zwlr_foreign_toplevel_manager, but the problem
-   * with that is:
-   * - (Possibly solvable and not strictly necessary) We don't receive the title
-   *   of toplevels unless they're changed.
-   * - (Necessary) zwlr_foreign_toplevel_manager doesn't provide a way to focus
-   *   the toplevel.
-   *
-   * So until I find ways to meet the conditions for other WMs, I can only
-   * support hyprland, which is what I use anyway.
-   */
+  /* Initialize a list of clients connected to the WM. */
   wm_clients_init(&peekaboo, &peekaboo.wm_clients, WM_CLIENT_HYPRLAND);
 
-  /* Third roundtrip.
-   * This isn't strictly required; we can skip straight to rendering, which
-   * may make the preview cards show up faster, but the previews itself will
-   * show up a bit later because we wouldn't have done a roundtrip to first
-   * request the buffers. Play around with this and maybe give a config option
-   * to allow skipping this step. */
-  log_debug("Starting third roundtrip\n");
-  log_indent();
-  wl_display_roundtrip(peekaboo.wl_display);
-  log_unindent();
-  log_debug("Finished third roundtrip\n");
-
-  /* In this roundtrip, what should've happened for hyprland's export_frames
-   * was:
+  /* In the next roundtrip/dispatch, what should happen for hyprland's
+   * export_frames is:
    * 1. For each export_frame, we receive "buffer" event(s) informing us of the
    *    buffer parameters like width, height, etc. that the export frames can
    *    support. We currently only take the last event.
    * 2. We receive a "buffer_done" event when there are no more "buffer" events.
    *    Then, we request a copy on the export_frame.
-   * 3. We receive a "ready" event when the copy is finished and render a frame,
-   *    allowing unready export_frames to only have a background color.
+   * 3. We receive a "ready" event when the copy is finished, allowing
+   *    previously unready preview windows to display a buffer.
    */
 
   surface_buffer_pool_init(&peekaboo.surface_buffer_pool);
@@ -593,52 +560,97 @@ int main(int argc, char **argv) {
                                        ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM);
   zwlr_layer_surface_v1_set_keyboard_interactivity(
       peekaboo.wl_layer_surface,
-      // We need this otherwise the focuswindow dispatch won't actually focus
-      // the keyboard on the new window.
+      /* We need this otherwise the focus windos dispatch won't actually focus
+       * the keyboard on the new window. */
       ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND);
+
+  struct wp_fractional_scale_v1 *fractional_scale = NULL;
+  if (peekaboo.fractional_scale_mgr) {
+    fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(
+        peekaboo.fractional_scale_mgr, peekaboo.wl_surface);
+    wp_fractional_scale_v1_add_listener(fractional_scale,
+                                        &fractional_scale_listener, &peekaboo);
+  }
+
+  peekaboo.wp_viewport =
+      wp_viewporter_get_viewport(peekaboo.wp_viewporter, peekaboo.wl_surface);
 
   wl_surface_commit(peekaboo.wl_surface);
 
-  while (wl_display_dispatch(peekaboo.wl_display) != -1) {
-    if (!peekaboo.running) {
-      break;
-    }
+  while (peekaboo.running && wl_display_dispatch(peekaboo.wl_display) != -1) {
   }
+
   if (peekaboo.selected_client != NULL) {
     wm_client_focus(peekaboo.selected_client);
   }
 
+  /* Cleanup only when debugging to make sure we've handled everything
+   * correctly.*/
+  // {{{
 #ifdef DEBUG
-  /* Cleanup */
-  wl_compositor_destroy(peekaboo.wl_compositor);
-  wl_shm_destroy(peekaboo.wl_shm);
-  zwlr_layer_shell_v1_destroy(peekaboo.wl_layer_shell);
-
-  free_seats(&peekaboo.seats);
-  free_outputs(&peekaboo.outputs);
-
-  zxdg_output_manager_v1_destroy(peekaboo.xdg_output_manager);
-  wp_viewporter_destroy(peekaboo.wp_viewporter);
-  hyprland_toplevel_export_manager_v1_destroy(
-      peekaboo.hyprland_toplevel_export_manager);
-
-  if (peekaboo.wl_surface_callback) {
-    wl_callback_destroy(peekaboo.wl_surface_callback);
+  /* Free outputs */
+  {
+    struct output *output;
+    struct output *tmp;
+    wl_list_for_each_safe(output, tmp, &peekaboo.outputs, link) {
+      wl_output_destroy(output->wl_output);
+      zxdg_output_v1_destroy(output->xdg_output);
+      wl_list_remove(&output->link);
+      free(output->name);
+      free(output);
+    }
   }
 
-  zwlr_layer_surface_v1_destroy(peekaboo.wl_layer_surface);
+  /* Free seats */
+  {
+    struct seat *seat;
+    struct seat *tmp;
+    wl_list_for_each_safe(seat, tmp, &peekaboo.seats, link) {
+      if (seat->wl_keyboard != NULL) {
+        wl_keyboard_destroy(seat->wl_keyboard);
+      }
 
-  wl_registry_destroy(peekaboo.wl_registry);
+      if (seat->xkb_state != NULL) {
+        xkb_state_unref(seat->xkb_state);
+      }
+      if (seat->xkb_keymap != NULL) {
+        xkb_keymap_unref(seat->xkb_keymap);
+      }
+      xkb_context_unref(seat->xkb_context);
 
-  wl_surface_destroy(peekaboo.wl_surface);
+      wl_seat_destroy(seat->wl_seat);
+      wl_list_remove(&seat->link);
+      free(seat);
+    }
+  }
 
   wm_clients_destroy(&peekaboo.wm_clients, WM_CLIENT_HYPRLAND);
   surface_buffer_pool_destroy(&peekaboo.surface_buffer_pool);
+  if (peekaboo.wl_surface_callback) {
+    wl_callback_destroy(peekaboo.wl_surface_callback);
+  }
+  wl_surface_destroy(peekaboo.wl_surface);
+
+  wp_viewport_destroy(peekaboo.wp_viewport);
+  wp_viewporter_destroy(peekaboo.wp_viewporter);
+
+  hyprland_toplevel_export_manager_v1_destroy(
+      peekaboo.hyprland_toplevel_export_manager);
+
+  zxdg_output_manager_v1_destroy(peekaboo.xdg_output_manager);
+  zwlr_layer_surface_v1_destroy(peekaboo.wl_layer_surface);
+
+  wl_shm_destroy(peekaboo.wl_shm);
+  zwlr_layer_shell_v1_destroy(peekaboo.wl_layer_shell);
+  wl_compositor_destroy(peekaboo.wl_compositor);
+  wl_registry_destroy(peekaboo.wl_registry);
 
   log_debug("Cleanup finished\n");
 #endif /* DEBUG */
+       // }}}
 
   wl_display_disconnect(peekaboo.wl_display);
 
   return 0;
 }
+// vim:foldmethod=marker

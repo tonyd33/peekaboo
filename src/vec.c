@@ -6,7 +6,7 @@ struct vec *vec_init() {
   struct vec *vec = malloc(sizeof(struct vec));
   vec->count = 0;
   vec->_capacity = 128;
-  vec->items = calloc(sizeof(void *), 128);
+  vec->items = calloc(128, sizeof(void *));
 
   return vec;
 }

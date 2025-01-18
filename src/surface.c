@@ -10,8 +10,6 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#define CAIRO_SURFACE_FORMAT CAIRO_FORMAT_ARGB32
-
 static void handle_buffer_release(void *data, struct wl_buffer *wl_buffer) {
   ((struct surface_buffer *)data)->state = SURFACE_BUFFER_READY;
 }
@@ -20,12 +18,13 @@ static const struct wl_buffer_listener wl_buffer_listener = {
     .release = handle_buffer_release,
 };
 
-static struct surface_buffer *surface_buffer_init(struct wl_shm *wl_shm,
+static struct surface_buffer *surface_buffer_init(struct config *config,
+                                                  struct wl_shm *wl_shm,
                                                   struct surface_buffer *buffer,
                                                   int32_t width,
                                                   int32_t height) {
   const uint32_t stride =
-      cairo_format_stride_for_width(CAIRO_SURFACE_FORMAT, width);
+      cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
   const uint32_t data_size = height * stride;
   void *data;
 
@@ -56,17 +55,16 @@ static struct surface_buffer *surface_buffer_init(struct wl_shm *wl_shm,
   buffer->state = SURFACE_BUFFER_READY;
 
   buffer->cairo_surface = cairo_image_surface_create_for_data(
-      buffer->data, CAIRO_SURFACE_FORMAT, width, height, stride);
+      buffer->data, CAIRO_FORMAT_ARGB32, width, height, stride);
   buffer->cairo = cairo_create(buffer->cairo_surface);
 
   log_debug("Creating Pango context.\n");
   PangoContext *context = pango_cairo_create_context(buffer->cairo);
 
-  // TODO: Make this configurable
   log_debug("Creating Pango font description.\n");
   PangoFontDescription *font_description =
-      pango_font_description_from_string("Comic Code");
-  pango_font_description_set_size(font_description, 16 * PANGO_SCALE);
+      pango_font_description_from_string(config->font);
+  pango_font_description_set_size(font_description, config->font_size * PANGO_SCALE);
   pango_context_set_font_description(context, font_description);
 
   buffer->pango_layout = pango_layout_new(context);
@@ -109,13 +107,15 @@ static void surface_buffer_destroy(struct surface_buffer *buffer) {
   }
 
   if (buffer->pango_layout) {
-    // This fixes a lot of memory leaks. Probably because pango uses this
-    // internally and doesn't free it itself.
+    /* This fixes a lot of valgrind errors. Probably because pango uses this
+     * internally and doesn't free it itself. */
     g_object_unref(pango_cairo_font_map_get_default());
     g_object_unref(buffer->pango_layout);
   }
 
   if (buffer->pango_context) {
+    /* Unfortunately, no matter what I do, valgrind reports pango_context as
+     * leaking. https://bugzilla.gnome.org/show_bug.cgi?id=573389 */
     g_object_unref(buffer->pango_context);
   }
 
@@ -131,7 +131,8 @@ void surface_buffer_pool_destroy(struct surface_buffer_pool *pool) {
   surface_buffer_destroy(&pool->buffers[1]);
 }
 
-struct surface_buffer *get_next_buffer(struct wl_shm *wl_shm,
+struct surface_buffer *get_next_buffer(struct config *config,
+                                       struct wl_shm *wl_shm,
                                        struct surface_buffer_pool *pool,
                                        uint32_t width, uint32_t height) {
   struct surface_buffer *buffer = NULL;
@@ -152,7 +153,7 @@ struct surface_buffer *get_next_buffer(struct wl_shm *wl_shm,
   }
 
   if (buffer->state == SURFACE_BUFFER_UNITIALIZED) {
-    if (surface_buffer_init(wl_shm, buffer, width, height) == NULL) {
+    if (surface_buffer_init(config, wl_shm, buffer, width, height) == NULL) {
       log_error("Could not initialize next buffer.\n");
       return NULL;
     }

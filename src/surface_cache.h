@@ -19,12 +19,10 @@ struct surface_cache {
   int source_width;
   int source_height;
 
-  cairo_surface_t *scaled_surface;
-  int scaled_width;
-  int scaled_height;
+  struct vec *entries;
 };
 
-struct surface_cache *surface_cache_create(cairo_surface_t *source_surface);
+struct surface_cache *surface_cache_init(cairo_surface_t *source_surface);
 
 void surface_cache_destroy(struct surface_cache *cache);
 
