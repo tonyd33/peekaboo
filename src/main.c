@@ -2,6 +2,7 @@
 #include "log.h"
 #include "peekaboo.h"
 #include "preview.h"
+#include "styles.h"
 #include "string.h"
 #include "surface.h"
 #include "util.h"
@@ -32,11 +33,9 @@
     }                                                                          \
   }
 
-#undef MAX
-#define MAX(a, b) (((a) > (b)) ? (a) : (b))
-
-#undef MIN
-#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+#ifdef DEBUG
+uint32_t launch_time_ms = 0;
+#endif
 
 static void noop(void) {}
 const struct wl_callback_listener surface_callback_listener;
@@ -62,13 +61,17 @@ static void send_frame(struct peekaboo *peekaboo) {
   render(peekaboo, surface_buffer);
 
   wl_surface_set_buffer_scale(peekaboo->wl_surface, 1);
-
-  wl_surface_attach(peekaboo->wl_surface, surface_buffer->wl_buffer, 0, 0);
   wp_viewport_set_destination(peekaboo->wp_viewport, peekaboo->surface_width,
                               peekaboo->surface_height);
-  wl_surface_damage(peekaboo->wl_surface, 0, 0, peekaboo->surface_width,
-                    peekaboo->surface_height);
+
+  wl_surface_attach(peekaboo->wl_surface, surface_buffer->wl_buffer, 0, 0);
+  wl_surface_damage_buffer(peekaboo->wl_surface, 0, 0, peekaboo->surface_width,
+                           peekaboo->surface_height);
   wl_surface_commit(peekaboo->wl_surface);
+
+#ifdef DEBUG
+  log_debug("Frame sent after %ums\n", gettime_ms() - launch_time_ms);
+#endif
 }
 
 static void request_frame(struct peekaboo *peekaboo) {
@@ -225,6 +228,9 @@ const struct wl_seat_listener wl_seat_listener = {
 static void handle_layer_surface_configure(
     void *data, struct zwlr_layer_surface_v1 *layer_surface, uint32_t serial,
     uint32_t width, uint32_t height) {
+#ifdef DEBUG
+  log_debug("Surface configured after %ums\n", gettime_ms() - launch_time_ms);
+#endif
   struct peekaboo *peekaboo = data;
   peekaboo->surface_width = width;
   peekaboo->surface_height = height;
@@ -456,75 +462,34 @@ static void parse_args(struct peekaboo *peekaboo, int argc, char **argv) {
 
 int main(int argc, char **argv) {
 #ifdef DEBUG
-  uint32_t launch_time_ms = gettime_ms();
+  launch_time_ms = gettime_ms();
 #endif
-  struct peekaboo peekaboo =
-      {
-          .config =
-              {
-                  .client_filter_behavior = CLIENT_FILTER_BEHAVIOR_DIM,
-                  .font = "Sans",
-                  .font_size = 16,
-                  .peekaboo = {.style =
-                                   {
-                                       .padding = {.top = 28,
-                                                   .bottom = 28,
-                                                   .left = 28,
-                                                   .right = 28},
-                                   }},
-                  .preview = {.style =
-                                  {
-                                      .padding = {.top = 20,
-                                                  .bottom = 20,
-                                                  .left = 20,
-                                                  .right = 20},
-                                      .margin = {.top = 20,
-                                                 .bottom = 20,
-                                                 .left = 20,
-                                                 .right = 20},
-                                      .background_color = 0x303446ff,
-                                      .border =
-                                          {
-                                              .color = 0x8caaeeff,
-                                              .width = 4,
-                                              .radius = 16,
-                                          },
-                                  }},
-                  .preview_title = {.style =
-                                        {.foreground_color = 0xb5bfe2ff,
-                                         .background_color = 0x41455aff,
-                                         .padding = {.top = 4,
-                                                     .bottom = 4,
-                                                     .left = 12,
-                                                     .right = 12},
-                                         .margin =
-                                             {.top = 0, .bottom = 12, .left = 0, .right = 0},
-                                         .border =
-                                             {
-                                                 .radius = 8,
-                                             }}},
-                  .shortcut = {.style =
-                                   {
-                                       .foreground_color = 0xb5bfe2ff,
-                                       .highlight_color = 0xf4b8e4ff,
-                                       .background_color = 0x41455aff,
-                                       .padding = {.top = 0,
-                                                   .bottom = 0,
-                                                   .left = 4,
-                                                   .right = 4},
-                                       .margin = {.top = 4, .right = 4},
-                                       .border = {.radius = 8},
-                                   }},
-              },
-
-          .request_frame = request_frame,
-          .running = true,
-          .selected_client = NULL,
-      };
+  struct peekaboo peekaboo = {
+      .config =
+          {
+              .client_filter_behavior = CLIENT_FILTER_BEHAVIOR_DIM,
+              .font = "Sans",
+              .font_size = 16,
+              .preview = {.style =
+                              {
+                                  .background_color = 0x000000ff,
+                              }},
+              .preview_title = {.style = {.align = {.horizontal = ALIGN_CENTER,
+                                                    .vertical = ALIGN_END}}},
+              .shortcut = {.style =
+                               {
+                                   .foreground_color = 0xffffffff,
+                                   .highlight_color = 0xff0000ff,
+                                   .background_color = 0x000000ff,
+                               }},
+          },
+      .request_frame = request_frame,
+      .running = true,
+      .selected_client = NULL,
+  };
   parse_args(&peekaboo, argc, argv);
   if (!config_load(&peekaboo.config, &peekaboo.config_path)) {
-    log_error("Configuration files had errors, exiting.\n");
-    exit(EXIT_FAILURE);
+    log_warning("Configuration files had errors, but will try to continue.\n");
   }
 
 #ifdef DEBUG
@@ -630,11 +595,11 @@ int main(int argc, char **argv) {
   peekaboo.wp_viewport =
       wp_viewporter_get_viewport(peekaboo.wp_viewporter, peekaboo.wl_surface);
 
-  wl_surface_commit(peekaboo.wl_surface);
 #ifdef DEBUG
   log_debug("About to do first render after %ums\n",
             gettime_ms() - launch_time_ms);
 #endif
+  wl_surface_commit(peekaboo.wl_surface);
 
   while (peekaboo.running && wl_display_dispatch(peekaboo.wl_display) != -1) {
   }

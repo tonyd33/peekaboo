@@ -1,5 +1,7 @@
 #include "config.h"
+#include <glib.h>
 #include "log.h"
+#include "src/styles.h"
 #include <cyaml/cyaml.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,10 +25,16 @@ struct border_extended {
   char *radius;
 };
 
+struct align_extended {
+  enum align_e vertical;
+  enum align_e horizontal;
+};
+
 struct element_style_extended {
   color_extended_t foreground_color;
   color_extended_t highlight_color;
   color_extended_t background_color;
+  struct align_extended align;
   struct border_extended border;
   struct directional_extended padding;
   struct directional_extended margin;
@@ -61,6 +69,12 @@ static const cyaml_strval_t client_filter_behavior_strings[] = {
     {"hide", CLIENT_FILTER_BEHAVIOR_HIDE},
 };
 
+static const cyaml_strval_t align_e_strings[] = {
+    {"start", ALIGN_START},
+    {"center", ALIGN_CENTER},
+    {"end", ALIGN_END},
+};
+
 static const cyaml_schema_field_t direction_schema[] = {
     CYAML_FIELD_STRING_PTR("all", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
                            struct directional_extended, all, 0,
@@ -83,6 +97,16 @@ static const cyaml_schema_field_t direction_schema[] = {
     CYAML_FIELD_STRING_PTR("right", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
                            struct directional_extended, right, 0,
                            CONFIG_FIELD_MAX_LEN),
+    CYAML_FIELD_END,
+};
+
+static const cyaml_schema_field_t align_schema[] = {
+    CYAML_FIELD_ENUM("vertical", CYAML_FLAG_OPTIONAL, struct align_extended,
+                     vertical, align_e_strings,
+                     CYAML_ARRAY_LEN(align_e_strings)),
+    CYAML_FIELD_ENUM("horizontal", CYAML_FLAG_OPTIONAL, struct align_extended,
+                     horizontal, align_e_strings,
+                     CYAML_ARRAY_LEN(align_e_strings)),
     CYAML_FIELD_END,
 };
 
@@ -114,6 +138,8 @@ static const cyaml_schema_field_t element_style_schema[] = {
                            CONFIG_FIELD_MAX_LEN),
     CYAML_FIELD_MAPPING("border", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
                         struct element_style_extended, border, border_schema),
+    CYAML_FIELD_MAPPING("align", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
+                        struct element_style_extended, align, align_schema),
     CYAML_FIELD_MAPPING("padding", CYAML_FLAG_OPTIONAL,
                         struct element_style_extended, padding,
                         direction_schema),
@@ -222,6 +248,16 @@ bool color_extended_load(color_t *color,
   return false;
 }
 
+bool align_extended_load(struct align *align,
+                         const struct align_extended *align_extended) {
+  if (align_extended == NULL) {
+    return true;
+  }
+  align->horizontal = align_extended->horizontal;
+  align->vertical = align_extended->vertical;
+  return true;
+}
+
 bool directional_extended_load(
     struct directional *directional,
     const struct directional_extended *directional_extended) {
@@ -291,6 +327,8 @@ bool element_style_extended_load(
                            element_style_extended->highlight_color) ||
       !border_extended_load(&element_style->border,
                             &element_style_extended->border) ||
+      !align_extended_load(&element_style->align,
+                           &element_style_extended->align) ||
       !directional_extended_load(&element_style->padding,
                                  &element_style_extended->padding) ||
       !directional_extended_load(&element_style->margin,
@@ -301,8 +339,13 @@ bool element_style_extended_load(
 
 bool config_extended_load(struct config *config,
                           const struct config_extended *config_extended) {
-  strncpy(config->font, config_extended->font, CONFIG_FIELD_MAX_LEN);
-  config->font_size = config_extended->font_size;
+  if (config_extended->font != NULL) {
+    strncpy(config->font, config_extended->font, CONFIG_FIELD_MAX_LEN);
+  }
+  if (config_extended->font_size != 0) {
+    log_debug("%d\n", config_extended->font_size);
+    config->font_size = MAX(config_extended->font_size, 4);
+  }
   config->client_filter_behavior = config_extended->client_filter_behavior;
   bool failed =
       !element_style_extended_load(&config->peekaboo.style,

@@ -1,7 +1,7 @@
-#include "vec.h"
 #include "surface.h"
 #include "log.h"
 #include "shm.h"
+#include "vec.h"
 #include <cairo/cairo.h>
 #include <fcntl.h>
 #include <pango/pango-font.h>
@@ -65,7 +65,8 @@ static struct surface_buffer *surface_buffer_init(struct config *config,
   log_debug("Creating Pango font description.\n");
   PangoFontDescription *font_description =
       pango_font_description_from_string(config->font);
-  pango_font_description_set_size(font_description, config->font_size * PANGO_SCALE);
+  pango_font_description_set_size(font_description,
+                                  config->font_size * PANGO_SCALE);
   pango_context_set_font_description(context, font_description);
 
   buffer->pango_layout = pango_layout_new(context);
@@ -194,11 +195,12 @@ struct surface_cache_entry *find_cache_entry(struct surface_cache *cache,
 
 cairo_surface_t *surface_cache_get_scaled(struct surface_cache *cache,
                                           int new_width, int new_height) {
+  struct surface_cache_entry surface_cache_entry;
   struct surface_cache_entry *p_surface_cache_entry =
       find_cache_entry(cache, new_width, new_height);
+
   if (p_surface_cache_entry == NULL) {
     // Create a new scaled surface
-    struct surface_cache_entry surface_cache_entry;
     p_surface_cache_entry = &surface_cache_entry;
 
     p_surface_cache_entry->scaled_surface =

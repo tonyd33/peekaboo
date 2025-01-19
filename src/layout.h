@@ -7,7 +7,7 @@
  * go and the dimensions they should be assigned, given a number of previews
  * we need to show. */
 
-struct preview_geometry {
+struct rect {
   double x, y;
   double width, height;
 };

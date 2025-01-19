@@ -1,5 +1,4 @@
 #include "vec.h"
-#include "log.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,7 +14,7 @@ struct vec *vec_init(size_t elt_size) {
 }
 
 void *vec_get(struct vec *vec, uint32_t index) {
-  if (0 <= index && index < vec->count) {
+  if (index < vec->count) {
     return (void *)(((uintptr_t)vec->items) + (vec->elt_size * index));
   }
   return NULL;

@@ -17,15 +17,14 @@
 #include <xkbcommon/xkbcommon-keysyms.h>
 #include <xkbcommon/xkbcommon.h>
 
-void cairo_set_source_u32(void *cairo, uint32_t color) {
-  cairo_set_source_rgba((cairo_t *)cairo, (color >> 24 & 0xff) / 255.0,
-                        (color >> 16 & 0xff) / 255.0,
-                        (color >> 8 & 0xff) / 255.0, (color & 0xff) / 255.0);
-}
-
 void draw_rounded_rectangle(cairo_t *cr, cairo_surface_t *base_surface,
-                            struct element_style *element_style, double x,
-                            double y, double width, double height) {
+                            const struct element_style *element_style,
+                            const struct rect *rect) {
+  double x = rect->x;
+  double y = rect->y;
+  double width = rect->width;
+  double height = rect->height;
+
   cairo_save(cr);
 
   double radius = element_style->border.radius;
@@ -75,53 +74,165 @@ void render_wm_client_preview_surface(cairo_t *cr, struct wm_client *wm_client,
   cairo_restore(cr);
 }
 
+void measure_text_themed(cairo_t *cr, PangoLayout *layout,
+                         cairo_surface_t *base_surface, const char *text,
+                         const struct element_style *theme,
+                         /* The rect of the element containing this text */
+                         const struct rect *container,
+                         /* The rect of this element, including its margin */
+                         struct rect *out_margin_rect,
+                         /* The rect without any padding applied */
+                         struct rect *out_outer_rect,
+                         /* The rect with padding applied */
+                         struct rect *out_inner_rect, PangoRectangle *ink_rect,
+                         PangoRectangle *logical_rect) {
+  // Assume the margin rect to be as big as possible for now
+  struct rect margin_rect = {
+      .x = container->x + theme->margin.left,
+      .y = container->y + theme->margin.top,
+      .width = container->width - theme->margin.right,
+      .height = container->height - theme->margin.bottom,
+  };
+
+  // Measure the total text width for centering
+  pango_layout_set_text(layout, text, -1);
+  pango_layout_set_width(layout, (margin_rect.width - (theme->padding.left +
+                                                       theme->padding.right)) *
+                                     PANGO_SCALE);
+  pango_layout_get_pixel_extents(layout, ink_rect, logical_rect);
+
+  // Figure out where to place
+  double background_x, background_y;
+  switch (theme->align.horizontal) {
+  case ALIGN_CENTER:
+    background_x =
+        margin_rect.x + ((margin_rect.width - logical_rect->width) / 2.0);
+    break;
+  case ALIGN_START:
+    background_x = margin_rect.x;
+    break;
+  case ALIGN_END:
+    background_x = margin_rect.x + margin_rect.width - logical_rect->width;
+    break;
+  }
+  switch (theme->align.vertical) {
+  case ALIGN_CENTER:
+    background_y =
+        margin_rect.y + ((margin_rect.height - logical_rect->height) / 2.0);
+    break;
+  case ALIGN_START:
+    background_y = margin_rect.y;
+    break;
+  case ALIGN_END:
+    background_y = margin_rect.y + margin_rect.height - logical_rect->height;
+    break;
+  }
+
+  // Save values
+  if (out_margin_rect != NULL) {
+    *out_margin_rect = (struct rect){
+        .x = background_x - theme->margin.left,
+        .y = background_y - theme->margin.top,
+        .width = logical_rect->width + theme->padding.left +
+                 theme->padding.right + theme->margin.right,
+        .height =
+            logical_rect->height + theme->padding.top + theme->padding.bottom,
+    };
+  }
+  if (out_outer_rect != NULL) {
+    *out_outer_rect = (struct rect){
+        .x = background_x,
+        .y = background_y,
+        .width =
+            logical_rect->width + theme->padding.left + theme->padding.right,
+        .height =
+            logical_rect->height + theme->padding.top + theme->padding.bottom,
+    };
+  }
+  if (out_inner_rect != NULL) {
+    *out_inner_rect = (struct rect){
+        .x = background_x + theme->padding.left,
+        .y = background_y + theme->padding.top,
+        .width = logical_rect->width,
+        .height = logical_rect->height,
+    };
+  }
+}
+
 void render_text_themed(cairo_t *cr, PangoLayout *layout,
-                        cairo_surface_t *base_surface, char *text,
-                        struct element_style *theme, PangoRectangle *ink_rect,
+                        cairo_surface_t *base_surface, const char *text,
+                        const struct element_style *theme,
+                        /* The rect of the element containing this text */
+                        const struct rect *container,
+                        /* The rect of this element, including its margin */
+                        struct rect *out_margin_rect,
+                        /* The rect without any padding applied */
+                        struct rect *out_outer_rect,
+                        /* The rect with padding applied */
+                        struct rect *out_inner_rect, PangoRectangle *ink_rect,
                         PangoRectangle *logical_rect) {
   cairo_save(cr);
 
-  double x, y;
-  cairo_get_current_point(cr, &x, &y);
+  // We don't expect caller to pass in the out parameters, but we do need them
+  // to pass into another function, so make sure they're allocated
+  struct rect outer_rect, inner_rect;
+  if (out_outer_rect == NULL) {
+    out_outer_rect = &outer_rect;
+  }
+  if (out_inner_rect == NULL) {
+    out_inner_rect = &inner_rect;
+  }
 
-  pango_layout_set_text(layout, text, -1);
-  pango_layout_get_pixel_extents(layout, ink_rect, logical_rect);
-
+  measure_text_themed(cr, layout, base_surface, text, theme, container,
+                      out_margin_rect, out_outer_rect, out_inner_rect, ink_rect,
+                      logical_rect);
   // Draw background
-  draw_rounded_rectangle(
-      cr, base_surface, theme, x, y,
-      logical_rect->width + theme->padding.left + theme->padding.right,
-      logical_rect->height + theme->padding.top + theme->padding.bottom);
+  cairo_set_source_u32(cr, theme->background_color);
+  draw_rounded_rectangle(cr, base_surface, theme, out_outer_rect);
 
   // Draw text
-  cairo_move_to(cr, x + theme->padding.left, y + theme->padding.top);
-  cairo_set_source_u32(cr, theme->foreground_color);
+  cairo_move_to(cr, out_inner_rect->x, out_inner_rect->y);
+  pango_layout_set_width(layout, out_inner_rect->width * PANGO_SCALE);
   pango_cairo_update_layout(cr, layout);
+  cairo_set_source_u32(cr, theme->foreground_color);
   pango_cairo_show_layout(cr, layout);
 
   cairo_restore(cr);
 }
 
-void render_highlighted_text_themed(cairo_t *cr, PangoLayout *layout,
-                                    cairo_surface_t *base_surface, char *text,
-                                    uint32_t hl_len,
-                                    struct element_style *theme,
-                                    PangoRectangle *ink_rect,
-                                    PangoRectangle *logical_rect) {
+void render_highlighted_text_themed(
+    cairo_t *cr, PangoLayout *layout, cairo_surface_t *base_surface, char *text,
+    uint32_t hl_len, struct element_style *theme,
+    /* The rect of the element containing this text */
+    struct rect *container,
+    /* The rect of this element, including its margin */
+    struct rect *out_margin_rect,
+    /* The rect without any padding applied */
+    struct rect *out_outer_rect,
+    /* The rect with padding applied */
+    struct rect *out_inner_rect, PangoRectangle *ink_rect,
+    PangoRectangle *logical_rect) {
   cairo_save(cr);
 
-  double x, y;
-  cairo_get_current_point(cr, &x, &y);
+  // We don't expect caller to pass in the out parameters, but we do need them
+  // to pass into another function, so make sure they're allocated
+  struct rect margin_rect, outer_rect, inner_rect;
+  if (out_margin_rect == NULL) {
+    out_margin_rect = &margin_rect;
+  }
+  if (out_outer_rect == NULL) {
+    out_outer_rect = &outer_rect;
+  }
+  if (out_inner_rect == NULL) {
+    out_inner_rect = &inner_rect;
+  }
 
-  // Measure total text
-  pango_layout_set_text(layout, text, -1);
-  pango_layout_get_pixel_extents(layout, ink_rect, logical_rect);
-
+  measure_text_themed(cr, layout, base_surface, text, theme, container,
+                      out_margin_rect, out_outer_rect, out_inner_rect, ink_rect,
+                      logical_rect);
   // Draw background
-  draw_rounded_rectangle(
-      cr, base_surface, theme, x, y,
-      logical_rect->width + theme->padding.left + theme->padding.right,
-      logical_rect->height + theme->padding.top + theme->padding.bottom);
+  cairo_set_source_u32(cr, theme->background_color);
+  draw_rounded_rectangle(cr, base_surface, theme, out_outer_rect);
 
   // Measure highlighted text
   PangoRectangle ink_rect_tmp;
@@ -130,7 +241,7 @@ void render_highlighted_text_themed(cairo_t *cr, PangoLayout *layout,
   pango_layout_get_pixel_extents(layout, &ink_rect_tmp, &logical_rect_tmp);
 
   // Draw highlighted text
-  cairo_move_to(cr, x + theme->padding.left, y + theme->padding.top);
+  cairo_move_to(cr, out_inner_rect->x, out_inner_rect->y);
   cairo_set_source_u32(cr, theme->highlight_color);
   pango_cairo_update_layout(cr, layout);
   pango_cairo_show_layout(cr, layout);
@@ -168,8 +279,10 @@ void render_preview(cairo_t *cr, PangoLayout *layout,
   // Draw the background
   {
     cairo_save(cr);
-    draw_rounded_rectangle(cr, base_surface, &config->preview.style, x, y,
-                           width, height);
+    struct rect background_rect = {
+        .x = x, .y = y, .width = width, .height = height};
+    draw_rounded_rectangle(cr, base_surface, &config->preview.style,
+                           &background_rect);
     cairo_restore(cr);
   }
 
@@ -181,59 +294,30 @@ void render_preview(cairo_t *cr, PangoLayout *layout,
   double padded_height = height - (config->preview.style.padding.top +
                                    config->preview.style.padding.bottom);
 
+  struct rect container = {
+      .x = padded_x,
+      .y = padded_y,
+      .width = padded_width,
+      .height = padded_height,
+  };
+  PangoRectangle ink_rect;
+  PangoRectangle logical_rect;
+
   if (wm_client->ready) {
     render_wm_client_preview_surface(cr, wm_client, padded_x, padded_y,
                                      padded_width, padded_height);
   }
 
   // Render the key shortcuts
-  {
-    PangoRectangle ink_rect;
-    PangoRectangle logical_rect;
-    cairo_move_to(cr, padded_x + config->shortcut.style.margin.left,
-                  padded_y + config->shortcut.style.margin.top);
-    render_highlighted_text_themed(
-        cr, layout, base_surface, wm_client->shortcut_keys,
-        wm_client->shortcut_keys_highlight_len, &config->shortcut.style,
-        &ink_rect, &logical_rect);
-  }
+  render_highlighted_text_themed(
+      cr, layout, base_surface, wm_client->shortcut_keys,
+      wm_client->shortcut_keys_highlight_len, &config->shortcut.style,
+      &container, NULL, NULL, NULL, &ink_rect, &logical_rect);
 
   // Render the title
-  {
-    cairo_save(cr);
-
-    // Measure the total text width for centering
-    pango_layout_set_text(layout, wm_client->title, -1);
-    PangoRectangle ink_rect;
-    PangoRectangle logical_rect;
-    pango_layout_set_width(layout, padded_width * PANGO_SCALE);
-    pango_layout_get_pixel_extents(layout, &ink_rect, &logical_rect);
-
-    // Center horizontally
-    double text_x = padded_x + ((padded_width - logical_rect.width) / 2.0);
-    // Bottom vertically
-    double text_y = padded_y + (padded_height - logical_rect.height) -
-                    config->preview_title.style.margin.bottom;
-
-    // Draw background for title
-    cairo_set_source_u32(cr, config->preview_title.style.background_color);
-    draw_rounded_rectangle(
-        cr, base_surface, &config->preview_title.style, text_x, text_y,
-        logical_rect.width + config->preview_title.style.padding.left +
-            config->preview_title.style.padding.right,
-        logical_rect.height + config->preview_title.style.padding.top +
-            config->preview_title.style.padding.bottom);
-
-    // Draw text
-    cairo_move_to(cr, text_x + config->preview_title.style.padding.left,
-                  text_y + config->preview_title.style.padding.top);
-    pango_cairo_update_layout(cr, layout);
-
-    cairo_set_source_u32(cr, config->preview_title.style.foreground_color);
-    pango_cairo_show_layout(cr, layout);
-
-    cairo_restore(cr);
-  }
+  render_text_themed(cr, layout, base_surface, wm_client->title,
+                     &config->preview_title.style, &container, NULL, NULL, NULL,
+                     &ink_rect, &logical_rect);
 
   if (wm_client->dim) {
     cairo_save(cr);
@@ -243,7 +327,9 @@ void render_preview(cairo_t *cr, PangoLayout *layout,
         .background_color = 0x7f,
         .border = config->preview.style.border,
     };
-    draw_rounded_rectangle(cr, base_surface, &style, x, y, width, height);
+    struct rect background_rect = {
+        .x = x, .y = y, .width = width, .height = height};
+    draw_rounded_rectangle(cr, base_surface, &style, &background_rect);
     cairo_restore(cr);
   }
 
@@ -311,8 +397,7 @@ void render(struct peekaboo *peekaboo, struct surface_buffer *surface_buffer) {
     uint32_t i = 0;
     wl_list_for_each(wm_client, &peekaboo->wm_clients, link) {
       if (!wm_client->hide) {
-        struct preview_geometry *preview_geometry =
-            vec_get(layout->preview_geometries, i);
+        struct rect *preview_geometry = vec_get(layout->preview_geometries, i);
 
         double x = preview_geometry->x + offset_x;
         double y = preview_geometry->y + offset_y;
@@ -334,8 +419,8 @@ void render(struct peekaboo *peekaboo, struct surface_buffer *surface_buffer) {
 
 #ifdef DEBUG_RENDERS
   uint32_t end_time_ms = gettime_ms();
-  log_debug("Full render took %u ms\n", end_time_ms - start_time_ms);
-#endif /* DEBUG_RENDERS */
+  log_debug("Full render took %ums\n", end_time_ms - start_time_ms);
+#endif
   surface_buffer->state = SURFACE_BUFFER_READY;
 }
 

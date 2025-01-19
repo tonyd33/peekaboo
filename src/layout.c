@@ -9,7 +9,7 @@
 
 struct layout *layout_init() {
   struct layout *layout = calloc(1, sizeof(struct layout));
-  layout->preview_geometries = vec_init(sizeof(struct preview_geometry));
+  layout->preview_geometries = vec_init(sizeof(struct rect));
   return layout;
 }
 
@@ -56,7 +56,7 @@ struct layout *calculate_layout_fixed_individual_aspect_ratio(
   struct layout *layout = layout_init();
   layout->num_cols = best_num_cols;
   layout->num_rows = best_num_rows;
-  struct preview_geometry preview_geometry;
+  struct rect preview_geometry;
   double bounding_height = best_num_rows * best_rect_height;
   // Used for centering.
   double y_offset = (surface_height - bounding_height) / 2.0;
