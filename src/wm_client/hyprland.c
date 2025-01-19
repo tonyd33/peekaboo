@@ -6,7 +6,6 @@
 #include "assert.h"
 #include "cairo.h"
 #include "hyprland-toplevel-export-v1.h"
-#include "src/surface_cache.h"
 #include "wm_client.h"
 #include <cjson/cJSON.h>
 #include <stdio.h>

@@ -1,7 +1,7 @@
 #ifndef _WM_CLIENT__WM_CLIENT_H_
 #define _WM_CLIENT__WM_CLIENT_H_
 
-#include "../surface_cache.h"
+#include "../surface.h"
 #include <cairo.h>
 #include <stdint.h>
 #include <wayland-util.h>

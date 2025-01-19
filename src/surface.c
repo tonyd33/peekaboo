@@ -1,3 +1,4 @@
+#include "vec.h"
 #include "surface.h"
 #include "log.h"
 #include "shm.h"
@@ -160,4 +161,67 @@ struct surface_buffer *get_next_buffer(struct config *config,
   }
 
   return buffer;
+}
+
+struct surface_cache *surface_cache_init(cairo_surface_t *source_surface) {
+  struct surface_cache *cache = malloc(sizeof(struct surface_cache));
+  cache->source_surface = source_surface;
+  cache->source_width = cairo_image_surface_get_width(source_surface);
+  cache->source_height = cairo_image_surface_get_height(source_surface);
+
+  cache->entries = vec_init(sizeof(struct surface_cache_entry));
+  return cache;
+}
+
+void surface_cache_destroy(struct surface_cache *cache) {
+  vec_destroy(cache->entries);
+  memset(cache, 0, sizeof(struct surface_cache));
+  free(cache);
+}
+
+struct surface_cache_entry *find_cache_entry(struct surface_cache *cache,
+                                             int new_width, int new_height) {
+  struct surface_cache_entry *surface_cache_entry;
+  for (uint32_t i = 0; i < cache->entries->count; i++) {
+    surface_cache_entry = vec_get(cache->entries, i);
+    if (surface_cache_entry->scaled_width == new_width &&
+        surface_cache_entry->scaled_height == new_height) {
+      return surface_cache_entry;
+    }
+  }
+  return NULL;
+}
+
+cairo_surface_t *surface_cache_get_scaled(struct surface_cache *cache,
+                                          int new_width, int new_height) {
+  struct surface_cache_entry *p_surface_cache_entry =
+      find_cache_entry(cache, new_width, new_height);
+  if (p_surface_cache_entry == NULL) {
+    // Create a new scaled surface
+    struct surface_cache_entry surface_cache_entry;
+    p_surface_cache_entry = &surface_cache_entry;
+
+    p_surface_cache_entry->scaled_surface =
+        cairo_image_surface_create(CAIRO_FORMAT_ARGB32, new_width, new_height);
+    cairo_t *scaled_ctx = cairo_create(p_surface_cache_entry->scaled_surface);
+
+    // Calculate scaling factors
+    double scale_x = (double)new_width / cache->source_width;
+    double scale_y = (double)new_height / cache->source_height;
+
+    // Apply scaling and draw the source surface onto the scaled surface
+    cairo_scale(scaled_ctx, scale_x, scale_y);
+    cairo_set_source_surface(scaled_ctx, cache->source_surface, 0, 0);
+    cairo_paint(scaled_ctx);
+
+    cairo_destroy(scaled_ctx);
+
+    // Update cache metadata
+    p_surface_cache_entry->scaled_width = new_width;
+    p_surface_cache_entry->scaled_height = new_height;
+
+    vec_append(cache->entries, p_surface_cache_entry);
+  }
+
+  return p_surface_cache_entry->scaled_surface;
 }

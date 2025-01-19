@@ -4,7 +4,6 @@
 #include "pango/pango-layout.h"
 #include "pango/pango-types.h"
 #include "peekaboo.h"
-#include "src/surface_cache.h"
 #include "styles.h"
 #include "surface.h"
 #include "util.h"
@@ -313,7 +312,7 @@ void render(struct peekaboo *peekaboo, struct surface_buffer *surface_buffer) {
     wl_list_for_each(wm_client, &peekaboo->wm_clients, link) {
       if (!wm_client->hide) {
         struct preview_geometry *preview_geometry =
-            layout->preview_geometries->items[i];
+            vec_get(layout->preview_geometries, i);
 
         double x = preview_geometry->x + offset_x;
         double y = preview_geometry->y + offset_y;

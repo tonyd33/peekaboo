@@ -58,7 +58,6 @@ sources = files(
   'src/layout.c',
   'src/vec.c',
   'src/util.c',
-  'src/surface_cache.c',
   'src/config.c',
 )
 
