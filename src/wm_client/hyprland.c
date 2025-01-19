@@ -169,6 +169,9 @@ void handle_hyprland_toplevel_export_frame_buffer_done(
         return;
       }
 
+      /* Ideally, I'd like to just reuse the same shm pool and fd, but I've
+       * had a lot of trouble getting it to work.
+       * TODO: Use a single wl_shm_pool. */
       struct wl_shm_pool *wl_shm_pool =
           wl_shm_create_pool(peekaboo->wl_shm, fd, data_size);
       wm_client->wl_buffer = wl_shm_pool_create_buffer(wl_shm_pool, 0, width,

@@ -37,6 +37,7 @@ struct toplevel_handle {
 
 struct peekaboo {
   struct config                              config;
+  char                                       *config_path;
 
   struct wl_display                          *wl_display;
   struct wl_registry                         *wl_registry;

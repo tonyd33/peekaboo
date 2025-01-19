@@ -26,9 +26,6 @@ struct surface_cache *surface_cache_init(cairo_surface_t *source_surface);
 
 void surface_cache_destroy(struct surface_cache *cache);
 
-bool surface_cache_needs_rescale(struct surface_cache *cache, int new_width,
-                                 int new_height);
-
 cairo_surface_t *surface_cache_get_scaled(struct surface_cache *cache,
                                           int new_width, int new_height);
 

@@ -25,9 +25,11 @@ void cairo_set_source_u32(void *cairo, uint32_t color) {
 }
 
 void draw_rounded_rectangle(cairo_t *cr, cairo_surface_t *base_surface,
-                            double x, double y, double width, double height,
-                            double radius) {
+                            struct element_style *element_style, double x,
+                            double y, double width, double height) {
   cairo_save(cr);
+
+  double radius = element_style->border.radius;
 
   double degrees = M_PI / 180.0;
 
@@ -41,7 +43,12 @@ void draw_rounded_rectangle(cairo_t *cr, cairo_surface_t *base_surface,
   cairo_arc(cr, x + radius, y + radius, radius, 180 * degrees, 270 * degrees);
   cairo_close_path(cr);
 
-  cairo_fill(cr);
+  cairo_set_source_u32(cr, element_style->background_color);
+  cairo_fill_preserve(cr);
+
+  cairo_set_line_width(cr, element_style->border.width);
+  cairo_set_source_u32(cr, element_style->border.color);
+  cairo_stroke(cr);
 
   cairo_restore(cr);
 }
@@ -82,12 +89,10 @@ void render_text_themed(cairo_t *cr, PangoLayout *layout,
   pango_layout_get_pixel_extents(layout, ink_rect, logical_rect);
 
   // Draw background
-  cairo_set_source_u32(cr, theme->background_color);
   draw_rounded_rectangle(
-      cr, base_surface, x, y,
+      cr, base_surface, theme, x, y,
       logical_rect->width + theme->padding.left + theme->padding.right,
-      logical_rect->height + theme->padding.top + theme->padding.bottom,
-      theme->background_corner_radius);
+      logical_rect->height + theme->padding.top + theme->padding.bottom);
 
   // Draw text
   cairo_move_to(cr, x + theme->padding.left, y + theme->padding.top);
@@ -114,12 +119,10 @@ void render_highlighted_text_themed(cairo_t *cr, PangoLayout *layout,
   pango_layout_get_pixel_extents(layout, ink_rect, logical_rect);
 
   // Draw background
-  cairo_set_source_u32(cr, theme->background_color);
   draw_rounded_rectangle(
-      cr, base_surface, x, y,
+      cr, base_surface, theme, x, y,
       logical_rect->width + theme->padding.left + theme->padding.right,
-      logical_rect->height + theme->padding.top + theme->padding.bottom,
-      theme->background_corner_radius);
+      logical_rect->height + theme->padding.top + theme->padding.bottom);
 
   // Measure highlighted text
   PangoRectangle ink_rect_tmp;
@@ -166,9 +169,8 @@ void render_preview(cairo_t *cr, PangoLayout *layout,
   // Draw the background
   {
     cairo_save(cr);
-    cairo_set_source_u32(cr, config->preview.style.background_color);
-    draw_rounded_rectangle(cr, base_surface, x, y, width, height,
-                           config->preview.style.background_corner_radius);
+    draw_rounded_rectangle(cr, base_surface, &config->preview.style, x, y,
+                           width, height);
     cairo_restore(cr);
   }
 
@@ -205,23 +207,27 @@ void render_preview(cairo_t *cr, PangoLayout *layout,
     pango_layout_set_text(layout, wm_client->title, -1);
     PangoRectangle ink_rect;
     PangoRectangle logical_rect;
+    pango_layout_set_width(layout, padded_width * PANGO_SCALE);
     pango_layout_get_pixel_extents(layout, &ink_rect, &logical_rect);
 
-    pango_layout_set_width(layout, padded_width * PANGO_SCALE);
-
     // Center horizontally
-    double text_x = padded_x + (padded_width - logical_rect.width) / 2.0;
+    double text_x = padded_x + ((padded_width - logical_rect.width) / 2.0);
     // Bottom vertically
     double text_y = padded_y + (padded_height - logical_rect.height) -
                     config->preview_title.style.margin.bottom;
 
     // Draw background for title
     cairo_set_source_u32(cr, config->preview_title.style.background_color);
-    draw_rounded_rectangle(cr, base_surface, text_x, text_y, logical_rect.width,
-                           logical_rect.height, 5);
+    draw_rounded_rectangle(
+        cr, base_surface, &config->preview_title.style, text_x, text_y,
+        logical_rect.width + config->preview_title.style.padding.left +
+            config->preview_title.style.padding.right,
+        logical_rect.height + config->preview_title.style.padding.top +
+            config->preview_title.style.padding.bottom);
 
     // Draw text
-    cairo_move_to(cr, text_x, text_y);
+    cairo_move_to(cr, text_x + config->preview_title.style.padding.left,
+                  text_y + config->preview_title.style.padding.top);
     pango_cairo_update_layout(cr, layout);
 
     cairo_set_source_u32(cr, config->preview_title.style.foreground_color);
@@ -233,9 +239,12 @@ void render_preview(cairo_t *cr, PangoLayout *layout,
   if (wm_client->dim) {
     cairo_save(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
-    cairo_set_source_rgba(cr, 0, 0, 0, 0.5);
-    draw_rounded_rectangle(cr, base_surface, x, y, width, height,
-                           config->preview.style.background_corner_radius);
+    /* 50% transparent black */
+    struct element_style style = {
+        .background_color = 0x7f,
+        .border = config->preview.style.border,
+    };
+    draw_rounded_rectangle(cr, base_surface, &style, x, y, width, height);
     cairo_restore(cr);
   }
 

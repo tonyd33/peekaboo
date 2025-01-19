@@ -1,15 +1,17 @@
+#include "config.h"
 #include "log.h"
 #include "peekaboo.h"
 #include "preview.h"
-#include "src/surface.h"
 #include "string.h"
+#include "surface.h"
 #include "util.h"
 #include "wm_client/wm_client.h"
 #include <fractional-scale-v1.h>
+#include <getopt.h>
 #include <hyprland-toplevel-export-v1.h>
 #include <stddef.h>
-#include <stdlib.h>
 #include <sys/mman.h>
+#include <time.h>
 #include <unistd.h>
 #include <viewporter.h>
 #include <wayland-client-core.h>
@@ -26,7 +28,7 @@
   {                                                                            \
     if ((value) == NULL) {                                                     \
       log_error("Failed to get " #name ".\n");                                 \
-      return 1;                                                                \
+      exit(EXIT_FAILURE);                                                      \
     }                                                                          \
   }
 
@@ -412,70 +414,122 @@ static const struct wl_registry_listener wl_registry_listener = {
 #pragma GCC diagnostic pop
 // }}}
 
+static void usage(bool err) {
+  fprintf(
+      err ? stderr : stdout, "%s",
+      "Usage: peekaboo [options]\n"
+      "\n"
+      "Basic options:\n"
+      "  -h, --help                           Print this message and exit.\n"
+      "  -c, --config <path>                  Specify a config file.\n");
+}
+
+/* Option parsing with getopt. */
+const struct option long_options[] = {{"help", no_argument, NULL, 'h'},
+                                      {"config", required_argument, NULL, 'c'},
+                                      {NULL, 0, NULL, 0}};
+const char *short_options = "hc:";
+
+static void parse_args(struct peekaboo *peekaboo, int argc, char **argv) {
+  int option_index = 0;
+
+  /* Handle errors ourselves. */
+  opterr = 0;
+
+  optind = 1;
+  int opt;
+  while ((opt = getopt_long(argc, argv, short_options, long_options,
+                            &option_index)) != -1) {
+    if (opt == 'h') {
+      usage(false);
+      exit(EXIT_SUCCESS);
+    } else if (opt == 'c') {
+      peekaboo->config_path =
+          realloc(peekaboo->config_path, strlen(optarg) + 1),
+      strcpy(peekaboo->config_path, optarg);
+    } else {
+      usage(true);
+      exit(EXIT_FAILURE);
+    }
+  }
+}
+
 int main(int argc, char **argv) {
-  /* TODO: Parse config dynamically */
-  struct peekaboo
-      peekaboo =
-          {
-              .config =
-                  {
-                      .client_filter_behavior = CLIENT_FILTER_BEHAVIOR_DIM,
-                      .font = "Sans",
-                      .font_size = 16,
-                      .peekaboo = {.style =
-                                       {
-                                           .padding = {.top = 30,
-                                                       .bottom = 30,
-                                                       .left = 200,
-                                                       .right = 200},
-                                       }},
-                      .preview = {.style =
-                                      {
-                                          .padding = {.top = 5,
-                                                      .bottom = 5,
-                                                      .left = 20,
-                                                      .right = 20},
-                                          .margin = {.top = 20,
-                                                     .bottom = 20,
-                                                     .left = 20,
-                                                     .right = 20},
-                                          .background_color = 0x99c1b9c0,
-                                          .background_corner_radius = 10,
-                                      }},
-                      .preview_title =
-                          {.style =
-                               {
-                                   .foreground_color = 0xffdde1ff,
-                                   .highlight_color = 0xffdde1ff,
-                                   .background_color = 0xa882ddff,
-                                   .padding =
-                                       {.top = 0, .bottom = 0, .left = 0, .right = 0},
-                                   .margin =
-                                       {.top = 0, .bottom = 10, .left = 0, .right = 0},
-                               }},
-                      .shortcut = {.style =
-                                       {
-                                           .foreground_color = 0xffdde1ff,
-                                           .highlight_color = 0xed475bff,
-                                           .background_color = 0xa882ddff,
-                                           .padding = {.top = 0,
-                                                       .bottom = 0,
-                                                       .left = 5,
-                                                       .right = 5},
-                                           .margin = {.top = 5, .right = 5},
-                                           .background_corner_radius = 5,
-                                       }},
-                  },
-              .wl_display = NULL,
-              .wl_registry = NULL,
-              .wl_compositor = NULL,
-              .wl_shm = NULL,
-              .wl_layer_shell = NULL,
-              .wl_surface = NULL,
-              .request_frame = request_frame,
-              .running = true,
-              .selected_client = NULL,
-          };
+#ifdef DEBUG
+  uint32_t launch_time_ms = gettime_ms();
+#endif
+  struct peekaboo peekaboo =
+      {
+          .config =
+              {
+                  .client_filter_behavior = CLIENT_FILTER_BEHAVIOR_DIM,
+                  .font = "Sans",
+                  .font_size = 16,
+                  .peekaboo = {.style =
+                                   {
+                                       .padding = {.top = 28,
+                                                   .bottom = 28,
+                                                   .left = 28,
+                                                   .right = 28},
+                                   }},
+                  .preview = {.style =
+                                  {
+                                      .padding = {.top = 20,
+                                                  .bottom = 20,
+                                                  .left = 20,
+                                                  .right = 20},
+                                      .margin = {.top = 20,
+                                                 .bottom = 20,
+                                                 .left = 20,
+                                                 .right = 20},
+                                      .background_color = 0x303446ff,
+                                      .border =
+                                          {
+                                              .color = 0x8caaeeff,
+                                              .width = 4,
+                                              .radius = 16,
+                                          },
+                                  }},
+                  .preview_title = {.style =
+                                        {.foreground_color = 0xb5bfe2ff,
+                                         .background_color = 0x41455aff,
+                                         .padding = {.top = 4,
+                                                     .bottom = 4,
+                                                     .left = 12,
+                                                     .right = 12},
+                                         .margin =
+                                             {.top = 0, .bottom = 12, .left = 0, .right = 0},
+                                         .border =
+                                             {
+                                                 .radius = 8,
+                                             }}},
+                  .shortcut = {.style =
+                                   {
+                                       .foreground_color = 0xb5bfe2ff,
+                                       .highlight_color = 0xf4b8e4ff,
+                                       .background_color = 0x41455aff,
+                                       .padding = {.top = 0,
+                                                   .bottom = 0,
+                                                   .left = 4,
+                                                   .right = 4},
+                                       .margin = {.top = 4, .right = 4},
+                                       .border = {.radius = 8},
+                                   }},
+              },
+
+          .request_frame = request_frame,
+          .running = true,
+          .selected_client = NULL,
+      };
+  parse_args(&peekaboo, argc, argv);
+  if (!config_load(&peekaboo.config, &peekaboo.config_path)) {
+    log_error("Configuration files had errors, exiting.\n");
+    exit(EXIT_FAILURE);
+  }
+
+#ifdef DEBUG
+  log_debug("Loaded config after %ums\n", gettime_ms() - launch_time_ms);
+#endif
 
   wl_list_init(&peekaboo.outputs);
   wl_list_init(&peekaboo.seats);
@@ -527,16 +581,17 @@ int main(int argc, char **argv) {
   log_unindent();
   log_debug("Finished second roundtrip\n");
 
-  /* Initialize a list of clients connected to the WM. */
+  /* Initialize a list of clients connected to the WM.
+   * TODO: Load in deterministic order (maybe based off pid) */
   wm_clients_init(&peekaboo, &peekaboo.wm_clients, WM_CLIENT_HYPRLAND);
 
   /* In the next roundtrip/dispatch, what should happen for hyprland's
    * export_frames is:
-   * 1. For each export_frame, we receive "buffer" event(s) informing us of the
-   *    buffer parameters like width, height, etc. that the export frames can
+   * 1. For each export_frame, we receive "buffer" event(s) informing us of
+   * the buffer parameters like width, height, etc. that the export frames can
    *    support. We currently only take the last event.
-   * 2. We receive a "buffer_done" event when there are no more "buffer" events.
-   *    Then, we request a copy on the export_frame.
+   * 2. We receive a "buffer_done" event when there are no more "buffer"
+   * events. Then, we request a copy on the export_frame.
    * 3. We receive a "ready" event when the copy is finished, allowing
    *    previously unready preview windows to display a buffer.
    */
@@ -560,8 +615,8 @@ int main(int argc, char **argv) {
                                        ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM);
   zwlr_layer_surface_v1_set_keyboard_interactivity(
       peekaboo.wl_layer_surface,
-      /* We need this otherwise the focus windos dispatch won't actually focus
-       * the keyboard on the new window. */
+      /* We need this otherwise the focus windows dispatch won't actually
+       * focus the keyboard on the new window. */
       ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND);
 
   struct wp_fractional_scale_v1 *fractional_scale = NULL;
@@ -576,6 +631,10 @@ int main(int argc, char **argv) {
       wp_viewporter_get_viewport(peekaboo.wp_viewporter, peekaboo.wl_surface);
 
   wl_surface_commit(peekaboo.wl_surface);
+#ifdef DEBUG
+  log_debug("About to do first render after %ums\n",
+            gettime_ms() - launch_time_ms);
+#endif
 
   while (peekaboo.running && wl_display_dispatch(peekaboo.wl_display) != -1) {
   }
@@ -644,6 +703,10 @@ int main(int argc, char **argv) {
   zwlr_layer_shell_v1_destroy(peekaboo.wl_layer_shell);
   wl_compositor_destroy(peekaboo.wl_compositor);
   wl_registry_destroy(peekaboo.wl_registry);
+
+  if (peekaboo.config_path != NULL) {
+    free(peekaboo.config_path);
+  }
 
   log_debug("Cleanup finished\n");
 #endif /* DEBUG */

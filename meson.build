@@ -20,6 +20,9 @@ debug = get_option('buildtype').startswith('debug')
 if debug
   add_project_arguments(
     '-DDEBUG',
+    # this is pretty performance-heavy so turn it on only when trying to
+    # actively catch bugs
+    # '-fsanitize=address',
     # these are so noisy
     # '-DDEBUG_RENDERS',
     language : 'c'
@@ -35,6 +38,8 @@ config_location = join_paths(
 add_project_arguments(
   [
     '-pedantic',
+    # '-Werror',
+    '-Wall',
     '-Wshadow',
     '-Wno-unused-parameter',
     '-D_GNU_SOURCE',
@@ -54,6 +59,7 @@ sources = files(
   'src/vec.c',
   'src/util.c',
   'src/surface_cache.c',
+  'src/config.c',
 )
 
 cc = meson.get_compiler('c')
@@ -62,7 +68,10 @@ math = cc.find_library('m')
 cairo = dependency('cairo')
 pangocairo = dependency('pangocairo')
 xkbcommon = dependency('xkbcommon')
+# TODO: Add these as subprojects rather than system dependencies.
+# I don't know how to do that
 cjson = dependency('libcjson')
+libcyaml = dependency('libcyaml')
 wayland_client = dependency('wayland-client')
 
 # Wayland protocols {{{
@@ -119,6 +128,7 @@ executable(
     wayland_client,
     xkbcommon,
     cjson,
+    libcyaml,
   ],
   install: true
 )

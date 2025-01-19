@@ -10,13 +10,19 @@ struct directional {
   int32_t top, bottom, left, right;
 };
 
+struct border {
+  uint32_t width;
+  color_t  color;
+  uint32_t radius;
+};
+
 struct element_style {
-  uint32_t foreground_color;
-  uint32_t highlight_color;
-  uint32_t background_color;
+  color_t            foreground_color;
+  color_t            highlight_color;
+  color_t            background_color;
+  struct border      border;
   struct directional padding;
   struct directional margin;
-  uint32_t background_corner_radius;
 };
 
 #endif /* _STYLES_H_ */
