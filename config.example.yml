@@ -1,0 +1,48 @@
+font: Sans
+font_size: 24
+client_filter_behavior: dim
+
+peekaboo:
+  style:
+    padding:
+      all: 28
+
+preview:
+  style:
+    background_color: 0x303446ff
+    border:
+      color: 0x8caaeeff
+      width: 4
+      radius: 16
+    padding:
+      all: 20
+    margin:
+      all: 20
+
+preview_title:
+  style:
+    foreground_color: 0xb5bfe2ff
+    background_color: 0x41455aff
+    border:
+      radius: 8
+    padding:
+      vertical: 4
+      horizontal: 12
+    margin:
+      bottom: 12
+    align:
+      horizontal: center
+      vertical: end
+
+shortcut:
+  style:
+    foreground_color: 0xb5bfe2ff
+    highlight_color: 0xf4b8e4ff
+    background_color: 0x41455aff
+    padding:
+      vertical: 0
+      horizontal: 4
+    margin:
+      all: 4
+    border:
+      radius: 8
