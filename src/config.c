@@ -344,7 +344,6 @@ bool config_extended_load(struct config *config,
     strncpy(config->font, config_extended->font, CONFIG_FIELD_MAX_LEN);
   }
   if (config_extended->font_size != 0) {
-    log_debug("%d\n", config_extended->font_size);
     config->font_size = MAX(config_extended->font_size, 4);
   }
   config->client_filter_behavior = config_extended->client_filter_behavior;
@@ -370,7 +369,7 @@ static const cyaml_config_t cyaml_config = {
 void get_config_path(char **config_path) {
   char *base_dir = getenv("XDG_CONFIG_HOME");
   char *ext = "";
-  size_t len = strlen("/peekaboo/config") + 1;
+  size_t len = strlen("/peekaboo/config.yml") + 1;
   if (!base_dir) {
     base_dir = getenv("HOME");
     ext = "/.config";
@@ -379,7 +378,7 @@ void get_config_path(char **config_path) {
       return;
     }
   }
-  len += strlen(base_dir) + strlen(ext) + 5;
+  len += strlen(base_dir) + strlen(ext) + 1;
   *config_path = realloc(*config_path, len);
   snprintf(*config_path, len, "%s%s%s", base_dir, ext, "/peekaboo/config.yml");
 }
