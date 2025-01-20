@@ -1,8 +1,8 @@
 #include "config.h"
-#include <glib.h>
 #include "log.h"
 #include "src/styles.h"
 #include <cyaml/cyaml.h>
+#include <glib.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -196,8 +196,9 @@ static const cyaml_schema_field_t yaml_config_fields_schema[] = {
     CYAML_FIELD_END,
 };
 
-static const cyaml_schema_value_t yaml_config_schema = {CYAML_VALUE_MAPPING(
-    CYAML_FLAG_POINTER, struct config_extended, yaml_config_fields_schema)};
+static const cyaml_schema_value_t yaml_config_schema = {
+    CYAML_VALUE_MAPPING(CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
+                        struct config_extended, yaml_config_fields_schema)};
 
 bool color_extended_load(color_t *color,
                          const color_extended_t color_extended) {

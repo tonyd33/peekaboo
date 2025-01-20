@@ -546,8 +546,7 @@ int main(int argc, char **argv) {
   log_unindent();
   log_debug("Finished second roundtrip\n");
 
-  /* Initialize a list of clients connected to the WM.
-   * TODO: Load in deterministic order (maybe based off pid) */
+  /* Initialize a list of clients connected to the WM. */
   wm_clients_init(&peekaboo, &peekaboo.wm_clients, WM_CLIENT_HYPRLAND);
 
   /* In the next roundtrip/dispatch, what should happen for hyprland's
